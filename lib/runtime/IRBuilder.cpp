@@ -1,11 +1,15 @@
 #include "runtime/IRBuilder.h"
 #include "Dialect/OPS/OPSDialect.h"
 #include "Dialect/OPS/OPSOps.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Location.h"
 #include "llvm/Support/raw_ostream.h"
+
+
+// TODO: Casting pointers to int64_t is not portable. We should use a better way to represent pointers in MLIR attributes.
 
 namespace ops_mlir {
 
@@ -50,7 +54,7 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
   // Infer block dims from dat arguments
   int ndim = loop.dims;
   for (const auto &arg : loop.args) {
-    if (arg.kind == ArgKind::Dat && !arg.dat.size.empty()) {
+    if (arg.argtype == OPS_ARG_DAT && !arg.dat.size.empty()) {
       ndim = std::max(ndim, static_cast<int>(arg.dat.size.size()));
     }
   }
@@ -71,8 +75,9 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
 
   // Build argument descriptors
   mlir::SmallVector<mlir::Attribute> argAttrs;
+  argAttrs.reserve(loop.args.size());
   for (const auto &arg : loop.args) {
-    auto argAttr = buildArgAttr(arg, ndim);
+    auto argAttr = buildArgAttr(arg);
     if (!argAttr) {
       llvm::errs() << "Failed to build arg attribute\n";
       return nullptr;
@@ -102,63 +107,62 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
   return builder.create(opState);
 }
 
-mlir::Attribute IRBuilder::buildArgAttr(const ArgDesc &arg, int ndim) {
-  auto loc = mlir::UnknownLoc::get(ctx_);
+mlir::Attribute IRBuilder::buildArgAttr(const ArgDesc &arg) {
+  auto datAttr = buildDatAttr(arg.dat);
+  auto stencilAttr = buildStencilAttr(arg.stencil);
+
+  return ops_mlir::ops::ArgAttr::get(
+      ctx_,
+      datAttr,
+      stencilAttr,
+      arg.dim,
+      arg.elem_size,
+      static_cast<int64_t>(arg.data),
+      static_cast<int64_t>(arg.data_d),
+      arg.acc,
+      arg.argtype,
+      arg.opt);
+}
+
+ops_mlir::ops::DatAttr IRBuilder::buildDatAttr(const DatDesc &dat) {
   mlir::OpBuilder builder(ctx_);
 
-  // Build stencil offsets
-  std::vector<int64_t> stencilOffsets;
-  if (!arg.stencil.offsets.empty()) {
-    stencilOffsets.assign(arg.stencil.offsets.begin(),
-                          arg.stencil.offsets.end());
-  }
-  auto stencilOffsetsAttr = mlir::DenseI64ArrayAttr::get(ctx_, stencilOffsets);
+  auto toI64Array = [&](const std::vector<int64_t> &vals) {
+    return mlir::DenseI64ArrayAttr::get(ctx_, vals);
+  };
 
-  // Build dat shape: [size[0], size[1], ..., d_m[0], d_m[1], ..., d_p[0],
-  // d_p[1], ...]
-  std::vector<int64_t> datShape;
-  for (int64_t s : arg.dat.size)
-    datShape.push_back(s);
-  for (int64_t d : arg.dat.d_m)
-    datShape.push_back(d);
-  for (int64_t d : arg.dat.d_p)
-    datShape.push_back(d);
-  auto datShapeAttr = mlir::DenseI64ArrayAttr::get(ctx_, datShape);
-
-  // Create argument descriptor as an array attribute
-  // Order: kind, access, dim, elem_size, dat_ptr, host_ptr, stencil_offsets,
-  // dat_shape, ndim
-  mlir::SmallVector<mlir::Attribute> argAttrs;
-  argAttrs.push_back(builder.getI32IntegerAttr(static_cast<int32_t>(arg.kind)));
-  argAttrs.push_back(builder.getI32IntegerAttr(arg.access));
-  argAttrs.push_back(builder.getI32IntegerAttr(arg.dim));
-  argAttrs.push_back(builder.getI32IntegerAttr(arg.elem_size));
-  argAttrs.push_back(
-      builder.getI64IntegerAttr(static_cast<int64_t>(arg.dat_handle)));
-  argAttrs.push_back(
-      builder.getI64IntegerAttr(static_cast<int64_t>(arg.host_ptr)));
-  argAttrs.push_back(stencilOffsetsAttr);
-  argAttrs.push_back(datShapeAttr);
-  argAttrs.push_back(builder.getI32IntegerAttr(ndim));
-
-  return mlir::ArrayAttr::get(ctx_, argAttrs);
+  return ops_mlir::ops::DatAttr::get(
+      ctx_,
+      dat.index,
+      static_cast<int64_t>(dat.block),
+      dat.dim,
+      dat.type_size,
+      dat.elem_size,
+      toI64Array(dat.size),
+      toI64Array(dat.base),
+      toI64Array(dat.d_m),
+      toI64Array(dat.d_p),
+      toI64Array(dat.stride),
+      builder.getStringAttr(dat.name),
+      builder.getStringAttr(dat.type),
+      static_cast<int64_t>(dat.data),
+      static_cast<int64_t>(dat.data_d)
+    );
 }
 
-mlir::DenseI64ArrayAttr
-IRBuilder::buildStencilOffsets(const StencilDesc &stencil) {
-  std::vector<int64_t> offsets(stencil.offsets.begin(), stencil.offsets.end());
-  return mlir::DenseI64ArrayAttr::get(ctx_, offsets);
-}
+ops_mlir::ops::StencilAttr IRBuilder::buildStencilAttr(const StencilDesc &stencil) {
+  mlir::OpBuilder builder(ctx_);
 
-mlir::DenseI64ArrayAttr IRBuilder::buildDatShape(const DatDesc &dat) {
-  std::vector<int64_t> shape;
-  for (int64_t s : dat.size)
-    shape.push_back(s);
-  for (int64_t d : dat.d_m)
-    shape.push_back(d);
-  for (int64_t d : dat.d_p)
-    shape.push_back(d);
-  return mlir::DenseI64ArrayAttr::get(ctx_, shape);
+  return ops_mlir::ops::StencilAttr::get(
+      ctx_,
+      stencil.index,
+      stencil.dims,
+      stencil.points,
+      builder.getStringAttr(stencil.name),
+      static_cast<int64_t>(stencil.stencil),
+      static_cast<int64_t>(stencil.stride),
+      static_cast<int64_t>(stencil.mgrid_stride),
+      stencil.type);
 }
 
 } // namespace ops_mlir

@@ -62,26 +62,26 @@ int main(int argc, const char **argv) {
 
   // memset
   int full_range[] = {-1, imax + 1, -1, jmax + 1};
-  ops_par_loop(set_zero, "set zero", block, 2, full_range,
+  ops_par_loop(set_zero, "set_zero", block, 2, full_range,
                ops_arg_dat(d_A, 1, S2D_00, "double", OPS_WRITE));
-  ops_par_loop(set_zero, "set zero", block, 2, full_range,
+  ops_par_loop(set_zero, "set_zero", block, 2, full_range,
                ops_arg_dat(d_Anew, 1, S2D_00, "double", OPS_WRITE));
 
   // set boundary conditions
   int bottom_range[] = {-1, imax + 1, -1, 0};
-  ops_par_loop(set_zero, "set zero", block, 2, bottom_range,
+  ops_par_loop(set_zero, "set_zero", block, 2, bottom_range,
                ops_arg_dat(d_A, 1, S2D_00, "double", OPS_WRITE));
 
   int top_range[] = {-1, imax + 1, jmax, jmax + 1};
-  ops_par_loop(set_zero, "set zero", block, 2, top_range,
+  ops_par_loop(set_zero, "set_zero", block, 2, top_range,
                ops_arg_dat(d_A, 1, S2D_00, "double", OPS_WRITE));
 
   int left_range[] = {-1, 0, -1, jmax + 1};
-  ops_par_loop(left_bndcon, "left bndcon", block, 2, left_range,
+  ops_par_loop(left_bndcon, "left_bndcon", block, 2, left_range,
                ops_arg_dat(d_A, 1, S2D_00, "double", OPS_WRITE), ops_arg_idx());
 
   int right_range[] = {imax, imax + 1, -1, jmax + 1};
-  ops_par_loop(right_bndcon, "right bndcon", block, 2, right_range,
+  ops_par_loop(right_bndcon, "right_bndcon", block, 2, right_range,
                ops_arg_dat(d_A, 1, S2D_00, "double", OPS_WRITE), ops_arg_idx());
 
   compile();

@@ -53,31 +53,17 @@ ArgDesc JITEngine::buildArgDesc(const ops_arg &arg) {
   ArgDesc desc;
   desc.dim = arg.dim;
   desc.elem_size = arg.elem_size;
-  desc.access = arg.acc;
-  desc.optional = arg.opt;
-  desc.dat_handle = reinterpret_cast<std::uintptr_t>(arg.dat);
-  desc.stencil_handle = reinterpret_cast<std::uintptr_t>(arg.stencil);
-  desc.host_ptr = reinterpret_cast<std::uintptr_t>(arg.data);
-  desc.device_ptr = reinterpret_cast<std::uintptr_t>(arg.data_d);
+  desc.data = reinterpret_cast<std::uintptr_t>(arg.data);
+  desc.data_d = reinterpret_cast<std::uintptr_t>(arg.data_d);
+  desc.acc = arg.acc;
+  desc.argtype = arg.argtype;
+  desc.opt = arg.opt;
 
-  switch (arg.argtype) {
-  case OPS_ARG_DAT:
-    desc.kind = ArgKind::Dat;
+  if (arg.argtype == OPS_ARG_DAT) {
     if (arg.dat)
       desc.dat = describeDat(arg.dat);
     if (arg.stencil)
       desc.stencil = describeStencil(arg.stencil);
-    break;
-  case OPS_ARG_IDX:
-    desc.kind = ArgKind::Idx;
-    break;
-  case OPS_ARG_GBL:
-    // Distinguish globals from reductions by access type
-    desc.kind = (arg.acc != OPS_READ) ? ArgKind::Reduce : ArgKind::Gbl;
-    break;
-  default:
-    desc.kind = ArgKind::Unknown;
-    break;
   }
 
   return desc;
@@ -85,13 +71,13 @@ ArgDesc JITEngine::buildArgDesc(const ops_arg &arg) {
 
 DatDesc JITEngine::describeDat(ops_dat dat) {
   DatDesc d;
-  d.handle = reinterpret_cast<std::uintptr_t>(dat);
-  d.block = reinterpret_cast<std::uintptr_t>(dat->block);
-  d.name = dat->name ? dat->name : "";
-  d.type = dat->type ? dat->type : "";
+  d.handle = reinterpret_cast<std::uintptr_t>(dat); // TODO: Casting pointers to uintptr_t is not portable. We should use a better way to represent pointers in MLIR attributes.
+  d.index = dat->index;
+  d.block = reinterpret_cast<std::uintptr_t>(dat->block); // TODO: Casting pointers to uintptr_t is not portable. We should use a better way to represent pointers in MLIR attributes.
+  
   d.dim = dat->dim;
-  d.elem_size = dat->elem_size;
   d.type_size = dat->type_size;
+  d.elem_size = dat->elem_size;
 
   int ndim = dat->block ? dat->block->dims : 1;
   for (int i = 0; i < ndim; ++i) {
@@ -101,21 +87,27 @@ DatDesc JITEngine::describeDat(ops_dat dat) {
     d.d_p.push_back(dat->d_p[i]);
     d.stride.push_back(dat->stride[i]);
   }
+
+  d.name = dat->name ? dat->name : "";
+  d.type = dat->type ? dat->type : "";
+
+  d.data = reinterpret_cast<std::uintptr_t>(dat->data);
+  d.data_d = reinterpret_cast<std::uintptr_t>(dat->data_d);
+
   return d;
 }
 
 StencilDesc JITEngine::describeStencil(ops_stencil stencil) {
   StencilDesc s;
-  s.handle = reinterpret_cast<std::uintptr_t>(stencil);
-  s.name = stencil->name ? stencil->name : "";
+  s.index = stencil->index;
   s.dims = stencil->dims;
   s.points = stencil->points;
-  s.type = stencil->type;
+  s.name = stencil->name ? stencil->name : "";
 
-  int n = stencil->dims * stencil->points;
-  s.offsets.assign(stencil->stencil, stencil->stencil + n);
-  if (stencil->stride)
-    s.stride.assign(stencil->stride, stencil->stride + stencil->dims);
+  s.stencil = reinterpret_cast<std::uintptr_t>(stencil->stencil);
+  s.stride = reinterpret_cast<std::uintptr_t>(stencil->stride);
+  s.mgrid_stride = reinterpret_cast<std::uintptr_t>(stencil->mgrid_stride);
+  s.type = stencil->type;
 
   return s;
 }
