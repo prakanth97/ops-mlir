@@ -1,173 +1,110 @@
-// --- StencilOps.td - Stencil Dialect Operation Definitions ----*- tablegen -*----
+//===- StencilOps.td - Stencil Dialect Operation Definitions ---*- tablegen -*-===//
 //
 // Author: Prakanth Thilakaraj
 // Date: June 2026
 //
 // This file is distributed under the MIT License.
 // See LICENSE.txt for details.
-//===----------------------------------------------------------------------===// 
+//===----------------------------------------------------------------------===//
+//
+// First, minimal cut of the Stencil dialect: just enough ops
+// (apply/access/load/store/return/index) to support
+// lib/passes/OPSToStencil.cpp lowering ops.par_loop into a func.func with
+// memref parameters and a stencil.apply body. Deliberately leaves out
+// alloc/cast/reduce/yield and any verifiers/interfaces for now -- add back
+// as real need arises, rather than carrying unused/unverified surface area.
+//
+// (Earlier drafts of this file referenced HasAncestor<Stencil_ApplyOp> /
+// HasParent<Stencil_ApplyOp> -- those traits take the *C++ class name* as a
+// string, e.g. HasAncestor<"ApplyOp">, not the dialect's tablegen `def`;
+// likewise IsTerminator does not exist upstream, the real trait is
+// Terminator. Fixed throughout below.)
+//===----------------------------------------------------------------------===//
 
 #ifndef STENCIL_OPS
 #define STENCIL_OPS
 
 include "mlir/IR/OpBase.td"
-include "mlir/IR/AttrTypeBase.td"
-include "mlir/IR/BuiltinAttributes.td"
+include "mlir/IR/BuiltinTypes.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
+include "StencilBase.td"
 include "StencilAttr.td"
+include "StencilTypes.td"
 
-//===----------------------------------------------------------------------===//
-// Stencil Dialect Definition
-//===----------------------------------------------------------------------===//
+// stencil.load/store's field operand accepts either a real
+// !stencil.field<...> or a plain memref<...> directly -- the latter is
+// what lib/passes/OPSToStencil.cpp produces (per the func.func-with-memref-
+// parameters design), so load/store can be "trivial" pass-throughs once a
+// field is already backed by a genuine memref, with no extra
+// external_load/cast bridging op needed for that case.
+def Stencil_FieldOrMemRef : AnyTypeOf<[Stencil_FieldType, AnyMemRef]>;
 
-def Stencil_Dialect : Dialect {
-  let name = "stencil";
-  let summary = "Stencil DSL dialect for structured mesh computations";
-  let description = [{
-    The Stencil dialect represents structured mesh computations as captured from
-    stencil DSLs. It models the loop structure, data dependencies, and stencil
-    operations. The dialect is designed to be lowered to control flow and
-    then to concrete execution targets.
-  }];
-  let cppNamespace = "::mlir::stencil";
-  let useDefaultTypePrinterParser = 1;
-  let useDefaultAttributePrinterParser = 1;
-}
-
-//===----------------------------------------------------------------------===//
-// Base Op class
-//===----------------------------------------------------------------------===//
-
-class Stencil_Op<str mnemonic, list<Trait> traits = []> 
-  : Op<Stencil_Dialect, mnemonic, traits>;
-
-// stencil.access — relative-offset read inside stencil.apply (Pure, HasAncestor<ApplyOp>)
-def Stencil_AccessOp : Stencil_Op<"access", [
-    Pure, 
-    HasAncestor<Stencil_ApplyOp>,
-    DeclareOpInterfaceMethods<HasShapeInferencePatterns>
-  ]> {
+// stencil.access -- relative-offset read inside stencil.apply.
+def Stencil_AccessOp : Stencil_Op<"access", [Pure, HasAncestor<"ApplyOp">]> {
   let summary = "Access a stencil temp at a static relative offset";
   let arguments = (ins
     Stencil_TempType:$temp,
-    Stencil_IndexAttr:$offset,
-    OptionalAttr<Stencil_IndexAttr>:$offset_mapping
-  );
-  let results = (outs AnyType:$res);  // element type of $temp
-  let assemblyFormat = "$temp `at` $offset (`mapping` $offset_mapping^)? attr-dict-with-keyword"
-                       " `:` type($temp) `->` type($res)";
-  let hasVerifier = 1;
-
-}
-
-// stencil.alloc
-def Stencil_AllocOp : Stencil_Op<"alloc", 
-    [DeclareOpInterfaceMethods<MemoryEffectOpInterface>]> {
-  let summary = "Allocate a new stencil field";
-  let results = (outs Stencil_FieldType:$field);
-  let assemblyFormat = "attr-dict `:` type($field)";
-}
-
-// stencil.cast — casts dynamic field to statically shaped field (NoSideEffect)
-def Stencil_CastOp : Stencil_Op<"cast", [
-    Pure,
-    DeclareOpInterfaceMethods<MemoryEffectOpInterface>,
-    DeclareOpInterfaceMethods<HasCanonicalizationPatterns>]> {
-  let arguments = (ins Stencil_FieldType:$field);
-  let results  = (outs Stencil_FieldType:$result);
-    let assemblyFormat =
-    "$field attr-dict-with-keyword `:` type($field) `->` type($result)";
-  let hasVerifier = 1;
-}
-
-// stencil.apply — core compute op; IsolatedFromAbove
-def Stencil_ApplyOp : Stencil_Op<"apply", [
-    IsolatedFromAbove, 
-    AttrSizedOperandSegments,
-    DeclareOpInterfaceMethods<MemoryEffectOpInterface>,
-    DeclareOpInterfaceMethods<HasCanonicalizationPatterns>,
-    DeclareOpInterfaceMethods<HasShapeInferenceInterface>]> {
-  let summary = "Apply a stencil computation over a domain";
-  let arguments = (ins
-    Variadic<AnyType>:$args,          // stencil.temp or stencil.field inputs
-    Variadic<Stencil_FieldType>:$dest // buffer-semantic destinations (optional),
-    OptionalAttr<StencilBoundsAttr>:$bounds
-  );
-  let results = (outs Variadic<Stencil_TempType>:$res);
-  let regions = (region AnyRegion:$region);
-
-  let assemblyFormat = "$args (`to` $dest)? (`(` $bounds `)`)? $region attr-dict-with-keyword"
-                       " `:` type($args) (`to` type($dest))? `->` type($res)";
-}
-
-// stencil.load — reads a field into a temp (ReadEffect on $field)
-def Stencil_LoadOp : Stencil_Op<"load", [
-    DeclareOpInterfaceMethods<MemoryEffectOpInterface>,
-    DeclareOpInterfaceMethods<HasCanonicalizationPatterns>
-]> {
-  let summary = "Load a stencil.field(with know bounds) into a stencil.temp";
-  let arguments = (ins Stencil_FieldType:$field);
-  let results  = (outs Stencil_TempType:$res);
-  let assemblyFormat =
-    "$field attr-dict-with-keyword `:` type($field) `->` type($res)";
-  let hasVerifier = 1;
-}
-
-// stencil.index — loop induction index for a given dimension (Pure, HasAncestor<ApplyOp>)
-def Stencil_IndexOp : Stencil_Op<"index", [
-    Pure, 
-    HasAncestor<Stencil_ApplyOp>
-  ]> {
-  let summary = "Return the current iteration index shifted by a static offset";
-  let arguments = (ins
-    IndexAttr:$dim,
     Stencil_IndexAttr:$offset
   );
-  let results = (outs Index:$idx);
-  let assemblyFormat = "$dim $offset attr-dict-with-keyword";
+  let results = (outs AnyType:$res);
+  let assemblyFormat = "$temp `at` $offset attr-dict-with-keyword"
+                       " `:` type($temp) `->` type($res)";
 }
 
-// stencil.return — terminator of stencil.apply; matches result types (IsTerminator, Pure)
-def Stencil_ReturnOp : Stencil_Op<"return", [
-    IsTerminator, 
-    Pure, 
-    HasParent<Stencil_ApplyOp>
-  ]> {
-  let summary = "Terminate stencil.apply and write computed values as results";
-  let arguments = (ins 
-    Variadic<AnyType>:$arg,
-    OptionalAttr<IntAttr>:$unroll  
+// stencil.apply -- core compute op; IsolatedFromAbove.
+def Stencil_ApplyOp : Stencil_Op<"apply", [IsolatedFromAbove]> {
+  let summary = "Apply a stencil computation over a domain";
+  let arguments = (ins
+    Variadic<Stencil_TempType>:$args,
+    Stencil_BoundsAttr:$bounds
   );
-  let assemblyFormat = "$arg (`unroll` $unroll^)? attr-dict-with-keyword `:` type($arg)";
+  let results = (outs Variadic<Stencil_TempType>:$res);
+  let regions = (region SizedRegion<1>:$region);
+  // Matches xdsl_impl/laplace_stencil.mlir's ordering:
+  //   stencil.apply(%a, ...) -> (!stencil.temp<...>, ...) { region } to <bounds>
+  // type($args) is required by ODS to parse the operand list back, but is
+  // wrapped in an optional group anchored on non-emptiness so the (only
+  // currently exercised) zero-arg case prints exactly like the reference
+  // IR, with no trailing `: ` clause.
+  let assemblyFormat = "`(` $args `)` `->` `(` type($res) `)` $region"
+                       " `to` $bounds attr-dict-with-keyword (`:` type($args)^)?";
 }
 
-// stencil.reduce — accumulates values across stencil iterations
-def Stencil_ReduceOp : Stencil_Op<"reduce"> {
-  let arguments = (ins AnyType:$acc, AnyType:$init);
-  let regions  = (region SizedRegion<1>:$body);   // single block, 2 args of same type
-  // must end with stencil.yield
-  let assemblyFormat = "$acc `init` $init $body attr-dict `:` type($acc)";
-  let hasVerifier = 1;
+// stencil.index -- the current iteration's coordinate along one dimension,
+// inside a stencil.apply body. Used for kernels that take an ops_arg_idx()
+// argument (e.g. left_bndcon/right_bndcon's `const int *idx`).
+def Stencil_IndexOp : Stencil_Op<"index", [Pure, HasAncestor<"ApplyOp">]> {
+  let summary = "Return the current iteration index for a given dimension";
+  let arguments = (ins I64Attr:$dim);
+  let results = (outs Index:$idx);
+  let assemblyFormat = "$dim attr-dict-with-keyword `:` type($idx)";
 }
 
-// stencil.store — writes a temp to a field (WriteEffect on $field)
-def Stencil_StoreOp : Stencil_Op<"store", [
-    DeclareOpInterfaceMethods<MemoryEffectOpInterface>,
-    DeclareOpInterfaceMethods<HasShapeInferencePatterns>
-]> {
+// stencil.load -- reads a field into a temp.
+def Stencil_LoadOp : Stencil_Op<"load"> {
+  let summary = "Load a stencil.field into a stencil.temp";
+  let arguments = (ins Stencil_FieldOrMemRef:$field);
+  let results  = (outs Stencil_TempType:$res);
+  let assemblyFormat = "$field attr-dict-with-keyword `:` type($field) `->` type($res)";
+}
+
+// stencil.return -- terminator of stencil.apply; matches result types.
+def Stencil_ReturnOp : Stencil_Op<"return", [Terminator, Pure, HasParent<"ApplyOp">]> {
+  let summary = "Terminate stencil.apply and yield computed values as its results";
+  let arguments = (ins Variadic<AnyType>:$arg);
+  let assemblyFormat = "$arg attr-dict-with-keyword `:` type($arg)";
+}
+
+// stencil.store -- writes a temp to a field over a sub-range.
+def Stencil_StoreOp : Stencil_Op<"store"> {
   let summary = "Write a stencil.temp to a stencil.field over a sub-range";
   let arguments = (ins
     Stencil_TempType:$temp,
-    Stencil_FieldType:$field,         // must have explicit (non-dynamic) bounds
-    StencilBoundsAttr:$bounds
+    Stencil_FieldOrMemRef:$field,
+    Stencil_BoundsAttr:$bounds
   );
   let assemblyFormat = "$temp `to` $field `(` $bounds `)` attr-dict-with-keyword"
                        " `:` type($temp) `to` type($field)";
 }
 
-// stencil.yield — terminator for stencil.reduce (IsTerminator)
-def Stencil_YieldOp : Stencil_Op<"yield", [IsTerminator]> {
-  let summary = "Yield a value from a stencil.reduce body";
-  let arguments = (ins AnyType:$operand);
-  let assemblyFormat = "$operand attr-dict `:` type($operand)";
-}
+#endif // STENCIL_OPS

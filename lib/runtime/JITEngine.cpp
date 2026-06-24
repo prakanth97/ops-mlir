@@ -1,10 +1,22 @@
 #include "runtime/JITEngine.h"
+#include "Dialect/stencil/StencilDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "passes/OPSToStencil.h"
+
+#include <iostream>
 
 namespace ops_mlir {
 
 JITEngine &JITEngine::instance() {
   static JITEngine rt;
   return rt;
+}
+
+JITEngine::JITEngine() {
+  // Needed by runStencilLowering()'s OPSToStencil pass output (func.func +
+  // stencil.*), built on the same ctx that already holds the OPS dialect.
+  ctx.getOrLoadDialect<mlir::stencil::StencilDialect>();
+  ctx.getOrLoadDialect<mlir::func::FuncDialect>();
 }
 
 void JITEngine::setFlushCallback(FlushCallback callback) {
@@ -112,12 +124,37 @@ StencilDesc JITEngine::describeStencil(ops_stencil stencil) {
   return s;
 }
 
+std::string JITEngine::runStencilLowering() {
+  if (!module)
+    return {};
+
+  auto clone = mlir::cast<mlir::ModuleOp>(module->clone());
+  convertOPSParLoopsToStencil(clone);
+
+  std::string result;
+  if (mlir::failed(clone.verify())) {
+    std::cerr << "OPSToStencil: verification failed\n";
+  } else {
+    llvm::raw_string_ostream os(result);
+    clone.print(os);
+  }
+
+  clone->erase();
+  return result;
+}
+
 void JITEngine::compile() {
   module = builder.buildModule(queue_);
 
   std::cout << "=== OPS.PAR_LOOP MLIR IR ===\n\n";
   std::string ir = builder.moduleToString(module);
   std::cout << ir << "\n";
+
+  std::string stencilIr = runStencilLowering();
+  if (!stencilIr.empty()) {
+    std::cout << "=== LOWERED STENCIL IR (C++ OPSToStencil pass) ===\n\n"
+              << stencilIr << "\n";
+  }
 }
 
 void JITEngine::execute() {

@@ -1,4 +1,4 @@
-//===- StencilAttr.td - Stencil Dialect Attribute Definitions ----*- tablegen -*-===//  
+//===- StencilAttr.td - Stencil Dialect Attribute Definitions -*- tablegen -*-===//
 //
 // Author: Prakanth Thilakaraj
 // Date: June 2026
@@ -11,45 +11,28 @@
 #define STENCIL_ATTRS
 
 include "mlir/IR/AttrTypeBase.td"
+include "StencilBase.td"
 
-// stencil.index
+// stencil.index -- a rank-1..3 list of per-dimension offsets, e.g.
+// #stencil.index<[1, 0]>. Backed by a plain DenseI64ArrayAttr rather than a
+// hand-rolled bracket-list parser, to keep this dialect's first cut fully
+// ODS-generated (no custom C++ parse/print).
 def Stencil_IndexAttr : AttrDef<Stencil_Dialect, "Index"> {
   let mnemonic = "index";
-  let parameters = (ins ArrayAttr:$array);  // ArrayAttr<IntAttr>, rank 1–3
-  let hasCustomAssemblyFormat = 1;
+  let parameters = (ins "mlir::DenseI64ArrayAttr":$array);
+  let assemblyFormat = "`<` $array `>`";
   let genVerifyDecl = 1;
-
-  // TODO: Do we need to add extra declarations to match xdsl impl
 }
 
+// stencil.bounds -- per-dimension [lb, ub) bounds of a stencil.apply's
+// iteration domain or a stencil.store's target sub-range, e.g.
+// #stencil.bounds<[-1, -1], [4097, 4097]>.
 def Stencil_BoundsAttr : AttrDef<Stencil_Dialect, "StencilBounds"> {
   let mnemonic = "bounds";
   let summary = "Stencil bounds attribute, lower and upper bounds for each dimension";
-  let parameters = (ins IndexAttr:$lb, IndexAttr:$ub);
-  let hasCustomAssemblyFormat = 1;
+  let parameters = (ins "mlir::DenseI64ArrayAttr":$lb, "mlir::DenseI64ArrayAttr":$ub);
+  let assemblyFormat = "`<` $lb `,` $ub `>`";
   let genVerifyDecl = 1;
-
-  // TODO: Do we need to add extra declarations to match xdsl impl
 }
 
-def Stencil_StencilType : TypeDef<Stencil_Dialect, "Type"> {
-  let mnemonic = "type";
-  let parameters = (ins
-    "Stencil_BoundsAttr | IntAttr":$bounds,
-    Type:$element_type
-  )
-  let hasCustomAssemblyFormat = 1;
-}
-
-def Stencil_FieldType : Stencil_StencilType<Stencil_Dialect, "Field"> {
-  let mnemonic = "field";
-}
-
-def Stencil_TempType : Stencil_StencilType<Stencil_Dialect, "Field"> {
-  let mnemonic = "temp";
-}
-
-def Stencil_ResultType : TypeDef<Stencil_Dialect, "Result"> {
-  let mnemonic = "result";
-  let parameters = (ins Type:$elem);
-}
+#endif // STENCIL_ATTRS

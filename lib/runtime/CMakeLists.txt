@@ -21,4 +21,7 @@ target_link_libraries(
 	MLIRSupport
 	MLIRPass
 	MLIROPSDialect
+	MLIRStencilDialect
+	MLIROPSPasses
+	MLIRFuncDialect
 )

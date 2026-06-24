@@ -32,8 +32,8 @@ public:
   const std::vector<LoopDesc> &queue() const { return queue_; }
 
 private:
-  JITEngine() = default;
-  
+  JITEngine();
+
   mlir::MLIRContext ctx;
   mlir::ModuleOp module;
   IRBuilder builder{&ctx};
@@ -46,6 +46,11 @@ private:
 
   DatDesc describeDat(ops_dat dat);
   StencilDesc describeStencil(ops_stencil stencil);
+
+  /// Run the ops.par_loop -> func.func+stencil.* pass (see
+  /// lib/passes/OPSToStencil.cpp) on a clone of `module`, verify it, and
+  /// return its textual form (empty on failure).
+  std::string runStencilLowering();
 
 private:
   std::mutex mutex_;
