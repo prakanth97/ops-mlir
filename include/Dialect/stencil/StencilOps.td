@@ -48,7 +48,7 @@ def Stencil_AccessOp : Stencil_Op<"access", [Pure, HasAncestor<"ApplyOp">]> {
   );
   let results = (outs AnyType:$res);
   let assemblyFormat = "$temp `at` $offset attr-dict-with-keyword"
-                       " `:` type($temp) `->` type($res)";
+                       " `:` qualified(type($temp)) `->` type($res)";
 }
 
 // stencil.apply -- core compute op; IsolatedFromAbove.
@@ -71,13 +71,16 @@ def Stencil_ApplyOp : Stencil_Op<"apply", [IsolatedFromAbove]> {
 }
 
 // stencil.index -- the current iteration's coordinate along one dimension,
-// inside a stencil.apply body. Used for kernels that take an ops_arg_idx()
-// argument (e.g. left_bndcon/right_bndcon's `const int *idx`).
+// shifted by a static per-dimension offset, inside a stencil.apply body.
+// Used for kernels that take an ops_arg_idx() argument (e.g.
+// left_bndcon/right_bndcon's `const int *idx`). Matches upstream xDSL's
+// stencil.index (xdsl.dialects.stencil.IndexOp): `dim` + `offset`, result
+// type always builtin `index` so it's never printed/parsed.
 def Stencil_IndexOp : Stencil_Op<"index", [Pure, HasAncestor<"ApplyOp">]> {
   let summary = "Return the current iteration index for a given dimension";
-  let arguments = (ins I64Attr:$dim);
+  let arguments = (ins I64Attr:$dim, Stencil_IndexAttr:$offset);
   let results = (outs Index:$idx);
-  let assemblyFormat = "$dim attr-dict-with-keyword `:` type($idx)";
+  let assemblyFormat = "$dim $offset attr-dict-with-keyword";
 }
 
 // stencil.load -- reads a field into a temp.
@@ -85,7 +88,7 @@ def Stencil_LoadOp : Stencil_Op<"load"> {
   let summary = "Load a stencil.field into a stencil.temp";
   let arguments = (ins Stencil_FieldOrMemRef:$field);
   let results  = (outs Stencil_TempType:$res);
-  let assemblyFormat = "$field attr-dict-with-keyword `:` type($field) `->` type($res)";
+  let assemblyFormat = "$field attr-dict-with-keyword `:` type($field) `->` qualified(type($res))";
 }
 
 // stencil.return -- terminator of stencil.apply; matches result types.
@@ -104,7 +107,7 @@ def Stencil_StoreOp : Stencil_Op<"store"> {
     Stencil_BoundsAttr:$bounds
   );
   let assemblyFormat = "$temp `to` $field `(` $bounds `)` attr-dict-with-keyword"
-                       " `:` type($temp) `to` type($field)";
+                       " `:` qualified(type($temp)) `to` type($field)";
 }
 
 #endif // STENCIL_OPS

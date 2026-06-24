@@ -173,12 +173,17 @@ func::FuncOp convertParLoop(ParLoopOp loop, unsigned index, ModuleOp module) {
         loc, builder.getF64Type(), blockArg, offsetAttr));
 
   // ops_arg_idx(): one stencil.index per dimension, per idx argument,
-  // appended after the dat-derived accesses.
+  // appended after the dat-derived accesses. No static shift, so offset
+  // is all-zero (matching the (0,...,0) default used for stencil.access).
+  SmallVector<int64_t> zeroIdxOffset(ndim, 0);
+  auto idxOffsetAttr = stencil::IndexAttr::get(
+      ctx, DenseI64ArrayAttr::get(ctx, zeroIdxOffset));
   SmallVector<Value> idxResults;
   for (unsigned i = 0; i < numIdxArgs; ++i)
     for (int64_t d = 0; d < ndim; ++d)
       idxResults.push_back(bodyBuilder.create<stencil::IndexOp>(
-          loc, bodyBuilder.getIndexType(), bodyBuilder.getI64IntegerAttr(d)));
+          loc, bodyBuilder.getIndexType(), bodyBuilder.getI64IntegerAttr(d),
+          idxOffsetAttr));
 
   SmallVector<Value> callArgs = accessResults;
   callArgs.append(idxResults.begin(), idxResults.end());
