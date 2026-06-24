@@ -10,6 +10,9 @@ mlir_tablegen(OPSDialect.cpp.inc -gen-dialect-defs)
 mlir_tablegen(OPSOps.h.inc -gen-op-decls)
 mlir_tablegen(OPSOps.cpp.inc -gen-op-defs)
 
+mlir_tablegen(OPSOpsAttrs.h.inc -gen-attrdef-decls)
+mlir_tablegen(OPSOpsAttrs.cpp.inc -gen-attrdef-defs)
+
 add_public_tablegen_target(OPSDialectTdGen)
 
 #===============================================================================
@@ -46,4 +49,5 @@ target_include_directories(
   ${MLIR_INCLUDE_DIRS}
   ${LLVM_INCLUDE_DIRS}
   ${CMAKE_SOURCE_DIR}/include
+  ${CMAKE_BINARY_DIR}/lib
 )

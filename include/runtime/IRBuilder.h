@@ -1,6 +1,7 @@
 #ifndef OPS_MLIR_OPS_FRONTEND_OPS_BUILDER_H
 #define OPS_MLIR_OPS_FRONTEND_OPS_BUILDER_H
 
+#include "Dialect/OPS/OPSOps.h"
 #include "runtime/Core.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -28,13 +29,11 @@ private:
   mlir::Operation *buildParLoopOp(const LoopDesc &loop);
 
   /// Convert a LoopDesc argument into an OPS argument attribute.
-  mlir::Attribute buildArgAttr(const ArgDesc &arg, int ndim);
+  mlir::Attribute buildArgAttr(const ArgDesc &arg);
 
-  /// Build stencil offsets attribute.
-  mlir::DenseI64ArrayAttr buildStencilOffsets(const StencilDesc &stencil);
+  ops_mlir::ops::DatAttr buildDatAttr(const DatDesc &dat);
 
-  /// Build dataset shape attribute.
-  mlir::DenseI64ArrayAttr buildDatShape(const DatDesc &dat);
+  ops_mlir::ops::StencilAttr buildStencilAttr(const StencilDesc &stencil);
 };
 
 } // namespace ops_mlir
