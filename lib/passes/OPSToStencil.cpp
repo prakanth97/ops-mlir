@@ -36,6 +36,7 @@
 
 #include "Dialect/OPS/OPSOps.h"
 #include "Dialect/stencil/StencilOps.h"
+#include "Dialect/stencil/StencilTypes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -110,7 +111,10 @@ func::FuncOp convertParLoop(ParLoopOp loop, unsigned index, ModuleOp module) {
   SmallVector<Type> paramTypes;
   for (ArgAttr arg : datArgs)
     paramTypes.push_back(
-        MemRefType::get(datSize(arg.getDat(), ndim), builder.getF64Type()));
+        // MemRefType::get(datSize(arg.getDat(), ndim), builder.getF64Type())
+        stencil::FieldType::get(ctx, datBounds(builder, arg.getDat(), ndim),
+                                builder.getF64Type())
+      );
 
   StringRef kernelName = loop.getKernelNameAttr().getValue();
 
