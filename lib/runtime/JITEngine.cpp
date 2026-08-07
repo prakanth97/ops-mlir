@@ -554,7 +554,7 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
     std::vector<void *> datPtrs;
     std::vector<std::pair<std::uintptr_t, std::size_t>> writebacks;
     for (const ArgDesc &arg : loop.args) {
-      if (arg.argtype != OPS_ARG_DAT)
+      if (arg.argtype != OPS_ARG_DAT && arg.argtype != OPS_ARG_GBL)
         continue;
 
       if (backend_ == Backend::CUDA) {
