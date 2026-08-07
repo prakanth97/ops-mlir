@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from xdsl.builder import Builder, InsertPoint
 from xdsl.context import Context
 from xdsl.dialects import arith, func, memref, stencil
-from xdsl.dialects.builtin import IndexType, IntegerAttr, MemRefType, ModuleOp, i32, f64
+from xdsl.dialects.builtin import IndexType, IntegerAttr, MemRefType, ModuleOp, i32, f64, FloatAttr
 from xdsl.ir import Block, Region, SSAValue
 from xdsl.passes import ModulePass
 
@@ -44,7 +44,7 @@ def normalized_range_bounds(rng: list[int], d_m: list[int], ndim: int) -> list[t
 
 def declare_kernel(
     module: ModuleOp, name: str, num_f64_args: int, num_idx_args: int, ndim: int,
-    num_results: int
+    num_results: int, num_reduce_args: int
 ) -> None:
     if any(
         isinstance(o, func.FuncOp) and o.sym_name.data == name
@@ -63,6 +63,8 @@ def declare_kernel(
     else:
         result_types = (f64,) * max(num_results, 1)
 
+    param_types= param_types + (MemRefType(f64, []),) * num_reduce_args
+
     decl = func.FuncOp(
         name,
         (param_types, result_types),
@@ -77,19 +79,25 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
     dat_args = [a for a in args if a.argtype.data == ArgType.DAT]
     num_idx_args = sum(1 for a in args if a.argtype.data == ArgType.IDX)
 
+    # using GBL type here as i's what reductions currently use in OPS dialect
+    reduce_args = [a for a in args if a.argtype.data == ArgType.GBL]
+
     d_m = halo_offsets(dat_args)
     apply_bounds = stencil.StencilBoundsAttr(
         normalized_range_bounds(list(op.range.get_values()), d_m, ndim)
     )
 
     field_types = [stencil.FieldType(field_bounds(arg.dat), f64) for arg in dat_args]
+    reduce_handle_types = [MemRefType(f64, [])] * len(reduce_args)
     
     # Outer function: ops_par_loop_<kernel>_<index>(fields...) -> ()
     kernel_name = op.kernel_name.data
     fn_name = f"ops_par_loop_{kernel_name}_{index}"
-    fn = func.FuncOp(fn_name, (tuple(field_types), ()), visibility="private")
+    fn = func.FuncOp(fn_name, (tuple(field_types) + tuple(reduce_handle_types), ()), visibility="private")
     block = fn.body.block
     fn_builder = Builder(InsertPoint.at_end(block))
+
+    reduce_handles = list(block.args[len(dat_args):])  # reduce handles come after dat args
 
     # Partition dat args (by access mode) into stencil.apply's reads/writes
     reads: list[SSAValue] = []
@@ -156,9 +164,19 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
             )
         idx_buffers.append(idx_buffer.memref)
 
-    call_args = access_results + idx_buffers
+    reduce_scratches = []
+    reduce_identities = []
+    for arg in reduce_args:
+        identity, kind = reduction_identity(arg.acc.data)
+        reduce_identities.append((identity, kind))
+        scratch = scope_builder.insert(memref.AllocaOp.get(f64, shape=[]))
+        id_const = scope_builder.insert(arith.ConstantOp(FloatAttr(identity, f64)))
+        scope_builder.insert(memref.StoreOp.get(id_const.result, scratch.memref, []))
+        reduce_scratches.append(scratch.memref)
+
+    call_args = access_results + idx_buffers + reduce_scratches
     declare_kernel(
-        module, kernel_name, len(access_results), len(idx_buffers), ndim, num_results
+        module, kernel_name, len(access_results), len(idx_buffers), ndim, num_results, len(reduce_args)
     )
 
     if num_results > 1:
@@ -168,31 +186,44 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
         scope_builder.insert(
             func.CallOp(kernel_name, call_args + [out_buf.memref], [])
         )
-        scope_results = []
+        write_results = []
         for i in range(num_results):
             idx_const = scope_builder.insert(arith.ConstantOp(IntegerAttr(i, IndexType())))
             loaded = scope_builder.insert(memref.LoadOp.get(out_buf.memref, [idx_const.result]))
-            scope_results.append(loaded.res)
+            write_results.append(loaded.res)
     else:
         kernel = scope_builder.insert(
             func.CallOp(kernel_name, call_args, [f64] * num_results)
         )
-        scope_results = list(kernel.results)
+        write_results = list(kernel.results)
 
-    scope_builder.insert(memref.AllocaScopeReturnOp.build(operands=[scope_results]))
+    # Load each reduce arg's per-point contribution
+    reduce_contribs = []
+    for scratch in reduce_scratches:
+        loaded = scope_builder.insert(memref.LoadOp.get(scratch, []))
+        reduce_contribs.append(loaded.res)
+
+    scope_builder.insert(memref.AllocaScopeReturnOp.build(operands=[write_results + reduce_contribs]))
 
     alloca_scope = block_builder.insert(
         memref.AllocaScopeOp.build(
             regions=[Region([scope_block])],
-            result_types=[[f64] * num_results],
+            result_types=[[f64] * (num_results + len(reduce_args))],
         )
     )
-    block_builder.insert(stencil.ReturnOp.get(list(alloca_scope.res)))
+    scope_results = list(alloca_scope.res)
+    write_vals, reduce_vals = scope_results[:num_results], scope_results[num_results:]
+
+    # Fold each reduce arg's contribution across all grid points
+    for val, (identity, kind) in zip(reduce_vals, reduce_identities):
+        assert val is not None, "contrib is None"
+        insert_reduce_combiner(block_builder, val, identity, kind)
+    block_builder.insert(stencil.ReturnOp.get(write_vals))
 
     # Create ApplyOp in buffer semantic form
     fn_builder.insert(
         stencil.ApplyOp.build(
-            operands=[reads, writes, []],  # reduction operands empty for now
+            operands=[reads, writes, reduce_handles],
             regions=[Region([apply_block])],
             result_types=[[]],  # buffer semantic does not return results
             properties={"bounds": apply_bounds},
@@ -217,3 +248,44 @@ class OPSToStencilPass(ModulePass):
         module.body.block.add_op(fn)
         loop_op.detach()
         loop_op.erase()
+
+
+def reduction_identity(access: int) -> tuple[float, str]:
+    """(identity element, combiner kind) for a reduce arg's access mode."""
+    if access == Access.MAX:
+        return (float("-inf"), "max")
+    if access == Access.MIN:
+        return (float("inf"), "min")
+    if access == Access.INC:
+        return (0.0, "add")
+    raise ValueError(f"unsupported reduction access mode: {access}")
+
+
+def insert_reduce_combiner(builder: Builder, contrib: SSAValue, identity: float, kind: str, ) -> None:
+    """Insert stencil.reduce %contrib init %identity { combiner } : f64."""
+    id_const = builder.insert(arith.ConstantOp(FloatAttr(identity, f64)))
+
+    combiner_block = Block(arg_types=[f64, f64])
+    cb = Builder(InsertPoint.at_end(combiner_block))
+    lhs, rhs = combiner_block.args
+
+    # NOTE: The reduction ops use a compare and select pattern; this is because openMP lowering does not support operations 
+    # like arith.maximumf and arith.minimumf, but compare and select is explicitly supported in the MLIR source code
+
+    if kind == "max":
+        cmp = cb.insert(arith.CmpfOp(lhs, rhs, "ogt"))
+        result = cb.insert(arith.SelectOp(cmp.result, lhs, rhs))
+    elif kind == "min":
+        cmp = cb.insert(arith.CmpfOp(lhs, rhs, "olt"))
+        result = cb.insert(arith.SelectOp(cmp.result, lhs, rhs))
+    elif kind == "add":
+        result = cb.insert(arith.AddfOp(lhs, rhs))
+    else:
+        raise ValueError(f"unsupported combiner kind: {kind}")
+
+    cb.insert(stencil.YieldOp(result.results[0]))
+    assert id_const.result is not None, "id_const.result is None"
+
+    builder.insert(
+        stencil.ReduceOp(contrib, id_const.result, Region([combiner_block]))
+    )
