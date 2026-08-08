@@ -551,11 +551,17 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
     std::string funcName =
         "ops_par_loop_" + loop.kernel_name + "_" + std::to_string(i);
 
-    std::vector<void *> datPtrs;
+    std::vector<void *> argPtrs;
     std::vector<std::pair<std::uintptr_t, std::size_t>> writebacks;
     for (const ArgDesc &arg : loop.args) {
       if (arg.argtype != OPS_ARG_DAT && arg.argtype != OPS_ARG_GBL)
         continue;
+
+      if (arg.argtype == OPS_ARG_GBL) {
+        ops_reduction handle = reinterpret_cast<ops_reduction>(arg.data);
+        argPtrs.push_back(reinterpret_cast<void *>(handle->data));
+        continue;
+      }
 
       if (backend_ == Backend::CUDA) {
         std::size_t bytes = datByteSize(arg.dat);
@@ -566,18 +572,17 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
           this->flush();
           return;
         }
-        datPtrs.push_back(reinterpret_cast<void *>(devPtr));
+        argPtrs.push_back(reinterpret_cast<void *>(devPtr));
         if (arg.acc == OPS_WRITE || arg.acc == OPS_RW || arg.acc == OPS_INC)
           writebacks.emplace_back(arg.data, bytes);
       } else {
-        datPtrs.push_back(reinterpret_cast<void *>(arg.data));
+        argPtrs.push_back(reinterpret_cast<void *>(arg.data));
       }
     }
 
     llvm::SmallVector<void *> packedArgs;
-    packedArgs.reserve(datPtrs.size());
-
-    for (void *&ptr : datPtrs) {
+    packedArgs.reserve(argPtrs.size());
+    for (void *&ptr : argPtrs) {
       packedArgs.push_back(&ptr);
     }
 
