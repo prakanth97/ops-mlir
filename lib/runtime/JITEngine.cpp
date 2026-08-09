@@ -558,8 +558,14 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
         continue;
 
       if (arg.argtype == OPS_ARG_GBL) {
-        ops_reduction handle = reinterpret_cast<ops_reduction>(arg.data);
-        argPtrs.push_back(reinterpret_cast<void *>(handle->data));
+        if (arg.acc == OPS_READ) {
+          // Broadcast read-only constant
+          argPtrs.push_back(reinterpret_cast<void *>(arg.data));
+        } else {
+          ops_reduction handle = reinterpret_cast<ops_reduction>(arg.data);
+          argPtrs.push_back(reinterpret_cast<void *>(handle->data));
+
+        }
         continue;
       }
 

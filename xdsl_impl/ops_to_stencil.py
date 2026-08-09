@@ -44,7 +44,7 @@ def normalized_range_bounds(rng: list[int], d_m: list[int], ndim: int) -> list[t
 
 def declare_kernel(
     module: ModuleOp, name: str, num_f64_args: int, num_idx_args: int, ndim: int,
-    num_results: int, num_reduce_args: int
+    num_results: int, reduce_dims: list[int] | None = None, const_dims: list[int] | None = None,
 ) -> None:
     if any(
         isinstance(o, func.FuncOp) and o.sym_name.data == name
@@ -55,6 +55,8 @@ def declare_kernel(
     # Fix ret hidden pointer issue when returning multiple results
     # Idx arguments are passed as MemRefType(i32, [ndim]) to match the OPS kernel ABI
     param_types = (f64,) * num_f64_args + (MemRefType(i32, [ndim]),) * num_idx_args
+    param_types = param_types + tuple(MemRefType(f64, []) for _ in reduce_dims)
+    param_types = param_types + tuple(MemRefType(f64, [d]) for d in const_dims)
 
     if num_results > 1:
         # Out-pointer ABI: kernel writes results into a trailing MemRefType(f64, [num_results]) param
@@ -62,8 +64,6 @@ def declare_kernel(
         result_types = ()
     else:
         result_types = (f64,) * max(num_results, 1)
-
-    param_types= param_types + (MemRefType(f64, []),) * num_reduce_args
 
     decl = func.FuncOp(
         name,
@@ -80,7 +80,9 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
     num_idx_args = sum(1 for a in args if a.argtype.data == ArgType.IDX)
 
     # using GBL type here as i's what reductions currently use in OPS dialect
-    reduce_args = [a for a in args if a.argtype.data == ArgType.GBL]
+    gbl_args = [a for a in args if a.argtype.data == ArgType.GBL]
+    reduce_args = [a for a in gbl_args if a.acc.data in (Access.MAX, Access.MIN, Access.INC)]
+    const_args = [a for a in gbl_args if a.acc.data == Access.READ]
 
     d_m = halo_offsets(dat_args)
     apply_bounds = stencil.StencilBoundsAttr(
@@ -89,15 +91,18 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
 
     field_types = [stencil.FieldType(field_bounds(arg.dat), f64) for arg in dat_args]
     reduce_handle_types = [MemRefType(f64, [])] * len(reduce_args)
+    const_handle_types = [MemRefType(f64, [arg.dim.data]) for arg in const_args]
     
     # Outer function: ops_par_loop_<kernel>_<index>(fields...) -> ()
     kernel_name = op.kernel_name.data
     fn_name = f"ops_par_loop_{kernel_name}_{index}"
-    fn = func.FuncOp(fn_name, (tuple(field_types) + tuple(reduce_handle_types), ()), visibility="private")
+    fn = func.FuncOp(fn_name, (tuple(field_types) + tuple(reduce_handle_types) + tuple(const_handle_types), ()), visibility="private")
     block = fn.body.block
     fn_builder = Builder(InsertPoint.at_end(block))
 
-    reduce_handles = list(block.args[len(dat_args):])  # reduce handles come after dat args
+    n_dat = len(dat_args)
+    reduce_handles = list(block.args[n_dat: n_dat + len(reduce_args)])  # reduce handles come after dat args
+    const_handles = list(block.args[n_dat + len(reduce_args):])
 
     # Partition dat args (by access mode) into stencil.apply's reads/writes
     reads: list[SSAValue] = []
@@ -114,8 +119,12 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
             writes.append(field)
 
     # Apply block body: access reads, compute indices, call kernel
-    apply_block = Block(arg_types=read_types)
+    apply_block = Block(arg_types=read_types + const_handle_types)
     block_builder = Builder(InsertPoint.at_end(apply_block))
+
+    n_reads = len(read_types)
+    read_block_args = apply_block.args[:n_reads]
+    const_block_args = list(apply_block.args[n_reads:])
 
     # One stencil.access per real stencil point (from stencil_offsets), not
     # just a placeholder (0, ..., 0) -- so multi-point stencils (e.g. a 5pt
@@ -174,9 +183,19 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
         scope_builder.insert(memref.StoreOp.get(id_const.result, scratch.memref, []))
         reduce_scratches.append(scratch.memref)
 
-    call_args = access_results + idx_buffers + reduce_scratches
+    # NOTE: call_args is grouped by category (dats, then idx, then reduce, then const), NOT by each arg's original position in the real
+    # ops_par_loop(...) call site. 
+    #
+    # If a future kernel interleaves categories differently (e.g. a GBL read between two dats), this will silently produce a call with
+    # arguments in the wrong order. Verify each new kernel's real parameter order against this grouping before assuming a port is correct.
+    #
+    # Future improvement: preserve each arg's original index in op.arg_list() and build call_args by interleaving in that order, rather than grouping
+    # by category.
+    call_args = access_results + idx_buffers + reduce_scratches + const_block_args
     declare_kernel(
-        module, kernel_name, len(access_results), len(idx_buffers), ndim, num_results, len(reduce_args)
+        module, kernel_name, len(access_results), len(idx_buffers), ndim, num_results, 
+        reduce_dims=[1] * len(reduce_args),
+        const_dims=[a.dim.data for a in const_args],
     )
 
     if num_results > 1:
@@ -223,7 +242,7 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
     # Create ApplyOp in buffer semantic form
     fn_builder.insert(
         stencil.ApplyOp.build(
-            operands=[reads, writes, reduce_handles],
+            operands=[reads + const_handles, writes, reduce_handles],
             regions=[Region([apply_block])],
             result_types=[[]],  # buffer semantic does not return results
             properties={"bounds": apply_bounds},
