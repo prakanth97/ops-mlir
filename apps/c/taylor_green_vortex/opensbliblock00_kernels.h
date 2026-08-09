@@ -369,29 +369,31 @@ void opensbliblock00Kernel032(
      Residual4_B0;
 }
 
-// NOT PORTED: opensbliblock00Kernel040 needs rkA[stage]/rkB[stage] via
-// ops_arg_gbl, which ops_to_stencil.py does not model yet (Gbl operands are
-// dropped from the generated kernel call). Converting this signature alone
-// would silently lose rkA/rkB and integrate with the wrong coefficients.
-// See opensbli.cpp for the (still-commented) call site.
-//
-//  void opensbliblock00Kernel040(const ACC<double> &Residual0_B0, const ACC<double> &Residual1_B0, const ACC<double>
-// &Residual2_B0, const ACC<double> &Residual3_B0, const ACC<double> &Residual4_B0, ACC<double> &rhoE_B0, ACC<double>
-// &rhoE_RKold_B0, ACC<double> &rho_B0, ACC<double> &rho_RKold_B0, ACC<double> &rhou0_B0, ACC<double> &rhou0_RKold_B0,
-// ACC<double> &rhou1_B0, ACC<double> &rhou1_RKold_B0, ACC<double> &rhou2_B0, ACC<double> &rhou2_RKold_B0, const double
-// *rkA, const double *rkB)
-// {
-//    rho_RKold_B0(0,0,0) = rkA[0]*rho_RKold_B0(0,0,0) + dt*Residual0_B0(0,0,0);
-//    rho_B0(0,0,0) = rkB[0]*rho_RKold_B0(0,0,0) + rho_B0(0,0,0);
-//    rhou0_RKold_B0(0,0,0) = rkA[0]*rhou0_RKold_B0(0,0,0) + dt*Residual1_B0(0,0,0);
-//    rhou0_B0(0,0,0) = rkB[0]*rhou0_RKold_B0(0,0,0) + rhou0_B0(0,0,0);
-//    rhou1_RKold_B0(0,0,0) = rkA[0]*rhou1_RKold_B0(0,0,0) + dt*Residual2_B0(0,0,0);
-//    rhou1_B0(0,0,0) = rkB[0]*rhou1_RKold_B0(0,0,0) + rhou1_B0(0,0,0);
-//    rhou2_RKold_B0(0,0,0) = rkA[0]*rhou2_RKold_B0(0,0,0) + dt*Residual3_B0(0,0,0);
-//    rhou2_B0(0,0,0) = rkB[0]*rhou2_RKold_B0(0,0,0) + rhou2_B0(0,0,0);
-//    rhoE_RKold_B0(0,0,0) = rkA[0]*rhoE_RKold_B0(0,0,0) + dt*Residual4_B0(0,0,0);
-//    rhoE_B0(0,0,0) = rkB[0]*rhoE_RKold_B0(0,0,0) + rhoE_B0(0,0,0);
-// }
+struct opensbliblock00Kernel040_result {
+  double rhoE_B0, rhoE_RKold_B0, rho_B0, rho_RKold_B0,
+         rhou0_B0, rhou0_RKold_B0, rhou1_B0, rhou1_RKold_B0,
+         rhou2_B0, rhou2_RKold_B0;
+};
+
+void opensbliblock00Kernel040(
+    double Residual0_B0, double Residual1_B0, double Residual2_B0,
+    double Residual3_B0, double Residual4_B0,
+    double rhoE_B0, double rhoE_RKold_B0, double rho_B0, double rho_RKold_B0,
+    double rhou0_B0, double rhou0_RKold_B0, double rhou1_B0, double rhou1_RKold_B0,
+    double rhou2_B0, double rhou2_RKold_B0,
+    const double *rkA, const double *rkB,
+    opensbliblock00Kernel040_result *out) {
+  out->rho_RKold_B0 = rkA[0]*rho_RKold_B0 + dt*Residual0_B0;
+  out->rho_B0 = rkB[0]*out->rho_RKold_B0 + rho_B0;
+  out->rhou0_RKold_B0 = rkA[0]*rhou0_RKold_B0 + dt*Residual1_B0;
+  out->rhou0_B0 = rkB[0]*out->rhou0_RKold_B0 + rhou0_B0;
+  out->rhou1_RKold_B0 = rkA[0]*rhou1_RKold_B0 + dt*Residual2_B0;
+  out->rhou1_B0 = rkB[0]*out->rhou1_RKold_B0 + rhou1_B0;
+  out->rhou2_RKold_B0 = rkA[0]*rhou2_RKold_B0 + dt*Residual3_B0;
+  out->rhou2_B0 = rkB[0]*out->rhou2_RKold_B0 + rhou2_B0;
+  out->rhoE_RKold_B0 = rkA[0]*rhoE_RKold_B0 + dt*Residual4_B0;
+  out->rhoE_B0 = rkB[0]*out->rhoE_RKold_B0 + rhoE_B0;
+}
 
 struct opensbliblock00Kernel000_result {
   double rhoE_RKold_B0;

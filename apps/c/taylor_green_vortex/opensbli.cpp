@@ -367,44 +367,36 @@ int main(int argc, char **argv) {
           ops_arg_dat(Residual3_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
           ops_arg_dat(Residual4_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW));
 
-      // NOT PORTED: opensbliblock00Kernel040 needs rkA[stage]/rkB[stage]
-      // (ops_arg_gbl), which ops_to_stencil.py does not model yet -- see
-      // opensbliblock00_kernels.h. Without this step the RK stage's
-      // Residual is computed above but never integrated back into
-      // rho_B0/rhou*_B0/rhoE_B0, so the solution does not actually advance.
-      //
-      // int iteration_range_40_block0[] = {0,         block0np0, 0,
-      //                                    block0np1, 0,         block0np2};
-      // ops_par_loop(
-      //     opensbliblock00Kernel040, "opensbliblock00Kernel040",
-      //     opensbliblock00, 3, iteration_range_40_block0,
-      //     ops_arg_dat(Residual0_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_READ),
-      //     ops_arg_dat(Residual1_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_READ),
-      //     ops_arg_dat(Residual2_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_READ),
-      //     ops_arg_dat(Residual3_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_READ),
-      //     ops_arg_dat(Residual4_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_READ),
-      //     ops_arg_dat(rhoE_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rhoE_RKold_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rho_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rho_RKold_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rhou0_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rhou0_RKold_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_RW),
-      //     ops_arg_dat(rhou1_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rhou1_RKold_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_RW),
-      //     ops_arg_dat(rhou2_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
-      //     ops_arg_dat(rhou2_RKold_B0, 1, stencil_0_00_00_00_3, "double",
-      //                 OPS_RW),
-      //     ops_arg_gbl(&rkA[stage], 1, "double", OPS_READ),
-      //     ops_arg_gbl(&rkB[stage], 1, "double", OPS_READ)
-      //   );
-      // compile_and_execute();
+      int iteration_range_40_block0[] = {0, block0np0, 0, block0np1, 0, block0np2};
+      ops_par_loop(
+          opensbliblock00Kernel040, "opensbliblock00Kernel040",
+          opensbliblock00, 3, iteration_range_40_block0,
+          ops_arg_dat(Residual0_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_READ),
+          ops_arg_dat(Residual1_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_READ),
+          ops_arg_dat(Residual2_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_READ),
+          ops_arg_dat(Residual3_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_READ),
+          ops_arg_dat(Residual4_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_READ),
+          ops_arg_dat(rhoE_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rhoE_RKold_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rho_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rho_RKold_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rhou0_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rhou0_RKold_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_RW),
+          ops_arg_dat(rhou1_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rhou1_RKold_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_RW),
+          ops_arg_dat(rhou2_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
+          ops_arg_dat(rhou2_RKold_B0, 1, stencil_0_00_00_00_3, "double",
+                      OPS_RW),
+          ops_arg_gbl(&rkA[stage], 1, "double", OPS_READ),
+          ops_arg_gbl(&rkB[stage], 1, "double", OPS_READ)
+        );
 
       compile_and_execute();
 
