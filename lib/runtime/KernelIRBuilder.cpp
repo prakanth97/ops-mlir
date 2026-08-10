@@ -28,6 +28,12 @@ namespace ops_mlir {
 
 namespace {
 
+/// Shared empty placeholders for ExprEmitter's outFields_/outFieldValues_
+/// parameters, used at call sites with no out-pointer context (the
+/// single-`return`-expression kernel shape has no out-pointer at all)
+static const llvm::SmallVector<const clang::FieldDecl *> kNoOutFields;
+static const llvm::SmallVector<mlir::Value> kNoOutFieldValues;
+
 class KernelFunctionFinder
     : public clang::RecursiveASTVisitor<KernelFunctionFinder> {
 public:
@@ -157,9 +163,13 @@ public:
   ExprEmitter(mlir::OpBuilder &builder, mlir::Location loc,
               const std::map<const clang::ValueDecl *, mlir::Value> &values,
               const std::map<std::string, const void *> &constants,
+              const clang::ParmVarDecl *outParam,
+              const llvm::SmallVectorImpl<const clang::FieldDecl *> &outFields,
+              const llvm::SmallVectorImpl<mlir::Value> &outFieldValues,
               llvm::raw_ostream &errs)
       : builder_(builder), loc_(loc), values_(values),
-        constants_(constants), errs_(errs) {}
+        constants_(constants), outParam_(outParam), outFields_(outFields),
+        outFieldValues_(outFieldValues), errs_(errs) {}
 
   bool ok() const { return ok_; }
 
@@ -282,6 +292,33 @@ public:
     return fail(stmt, "unsupported expression construct");
   }
 
+  mlir::Value VisitMemberExpr(const clang::MemberExpr *expr) {
+    if (!expr->isArrow() || !outParam_)
+      return fail(expr, "member access is only supported for the "
+                        "out-pointer parameter's fields");
+    const auto *base = llvm::dyn_cast<clang::DeclRefExpr>(
+        expr->getBase()->IgnoreParenImpCasts());
+    if (!base || base->getDecl() != outParam_)
+      return fail(expr, "member access base must be the kernel's "
+                        "out-pointer parameter");
+    const auto *field = llvm::dyn_cast<clang::FieldDecl>(expr->getMemberDecl());
+    auto it = field ? llvm::find(outFields_, field) : outFields_.end();
+    if (it == outFields_.end())
+      return fail(expr, "'" + expr->getMemberDecl()->getNameAsString() +
+                            "' is read before being written in this "
+                            "kernel (out-pointer fields can only be read "
+                            "after they've been assigned earlier in the "
+                            "same kernel body)");
+    std::size_t idx = std::distance(outFields_.begin(), it);
+    if (!outFieldValues_[idx])
+      return fail(expr, "'" + expr->getMemberDecl()->getNameAsString() +
+                            "' is read before being written in this "
+                            "kernel (out-pointer fields can only be read "
+                            "after they've been assigned earlier in the "
+                            "same kernel body)");
+    return outFieldValues_[idx];
+  }
+
   mlir::Value fail(const clang::Stmt *at, const llvm::Twine &message) {
     if (ok_) {
       ok_ = false;
@@ -362,6 +399,9 @@ private:
   const std::map<const clang::ValueDecl *, mlir::Value> &values_;
   const std::map<std::string, const void *> &constants_;
   llvm::raw_ostream &errs_;
+  const clang::ParmVarDecl *outParam_;
+  const llvm::SmallVectorImpl<const clang::FieldDecl *> &outFields_;
+  const llvm::SmallVectorImpl<mlir::Value> &outFieldValues_;
   bool ok_ = true;
 };
 
@@ -382,7 +422,7 @@ public:
               llvm::raw_ostream &errs)
       : builder_(builder), loc_(loc), values_(values), constants_(constants),
         outParam_(outParam), outMemref_(outMemref), outFields_(outFields),
-        errs_(errs) {}
+        outFieldValues_(outFields.size()), errs_(errs) {}
 
   bool ok() const { return ok_; }
 
@@ -421,7 +461,7 @@ private:
                             "' must be initialized at declaration");
         return;
       }
-      ExprEmitter emitter(builder_, loc_, values_, constants_, errs_);
+      ExprEmitter emitter(builder_, loc_, values_, constants_, outParam_, outFields_, outFieldValues_, errs_);
       mlir::Value v = emitter.Visit(var->getInit());
       if (!emitter.ok()) {
         ok_ = false;
@@ -458,7 +498,7 @@ private:
     }
     std::size_t fieldIndex = std::distance(outFields_.begin(), it);
 
-    ExprEmitter emitter(builder_, loc_, values_, constants_, errs_);
+    ExprEmitter emitter(builder_, loc_, values_, constants_, outParam_, outFields_, outFieldValues_, errs_);
     mlir::Value rhs = emitter.Visit(bin->getRHS());
     if (!emitter.ok()) {
       ok_ = false;
@@ -469,6 +509,7 @@ private:
         loc_, builder_.getIndexAttr(static_cast<int64_t>(fieldIndex)));
     builder_.create<mlir::memref::StoreOp>(loc_, rhs, outMemref_,
                                            mlir::ValueRange{index});
+    outFieldValues_[fieldIndex] = rhs;  
   }
 
   void fail(const clang::Stmt *, const llvm::Twine &message) {
@@ -485,6 +526,7 @@ private:
   const clang::ParmVarDecl *outParam_;
   mlir::Value outMemref_;
   const llvm::SmallVectorImpl<const clang::FieldDecl *> &outFields_;
+  llvm::SmallVector<mlir::Value> outFieldValues_;
   llvm::raw_ostream &errs_;
   bool ok_ = true;
 };
@@ -638,7 +680,7 @@ mlir::func::FuncOp KernelIRBuilder::generate(
             funcOp.erase();
             return nullptr;
           }
-          ExprEmitter emitter(builder, loc, values, constants, errs);
+          ExprEmitter emitter(builder, loc, values, constants, /*outParam=*/nullptr, kNoOutFields, kNoOutFieldValues, errs);
           mlir::Value v = emitter.Visit(var->getInit());
           if (!emitter.ok()) { funcOp.erase(); return nullptr; }
           values[var] = v;
@@ -668,7 +710,7 @@ mlir::func::FuncOp KernelIRBuilder::generate(
             extractReductionContribution(bin->getRHS(), target, errs);
         if (!contribExpr) { funcOp.erase(); return nullptr; }
 
-        ExprEmitter emitter(builder, loc, values, constants, errs);
+        ExprEmitter emitter(builder, loc, values, constants, /*outParam=*/nullptr, kNoOutFields, kNoOutFieldValues, errs);
         mlir::Value v = emitter.Visit(contribExpr);
         if (!emitter.ok()) { funcOp.erase(); return nullptr; }
         contributions[target] = v;
@@ -687,7 +729,7 @@ mlir::func::FuncOp KernelIRBuilder::generate(
       funcOp.erase();
       return nullptr;
     }
-    ExprEmitter retEmitter(builder, loc, values, constants, errs);
+    ExprEmitter retEmitter(builder, loc, values, constants, /*outParam=*/nullptr, kNoOutFields, kNoOutFieldValues, errs);
     mlir::Value mainResult = retEmitter.Visit(ret->getRetValue());
     if (!retEmitter.ok()) { funcOp.erase(); return nullptr; }
 
