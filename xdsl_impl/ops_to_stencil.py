@@ -63,7 +63,7 @@ def declare_kernel(
         param_types = param_types + (MemRefType(f64, [num_results]),)
         result_types = ()
     else:
-        result_types = (f64,) * max(num_results, 1)
+        result_types = (f64,) * max(num_results, 1) + (f64,) * len(reduce_dims)
 
     decl = func.FuncOp(
         name,
@@ -198,6 +198,7 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
         const_dims=[a.dim.data for a in const_args],
     )
 
+    n_reduce = len(reduce_args)
     if num_results > 1:
         out_buf = scope_builder.insert(
             memref.AllocaOp.get(f64, shape=[num_results])
@@ -210,17 +211,13 @@ def convert_par_loop(op: ParLoopOp, index: int, module: ModuleOp) -> func.FuncOp
             idx_const = scope_builder.insert(arith.ConstantOp(IntegerAttr(i, IndexType())))
             loaded = scope_builder.insert(memref.LoadOp.get(out_buf.memref, [idx_const.result]))
             write_results.append(loaded.res)
+        reduce_contribs = [] # multi-write + reduce combo stays unsupported for now
     else:
         kernel = scope_builder.insert(
-            func.CallOp(kernel_name, call_args, [f64] * num_results)
+            func.CallOp(kernel_name, call_args, [f64] * (num_results + n_reduce))
         )
-        write_results = list(kernel.results)
-
-    # Load each reduce arg's per-point contribution
-    reduce_contribs = []
-    for scratch in reduce_scratches:
-        loaded = scope_builder.insert(memref.LoadOp.get(scratch, []))
-        reduce_contribs.append(loaded.res)
+        all_results = list(kernel.results)
+        write_results, reduce_contribs = all_results[:num_results], all_results[num_results:]
 
     scope_builder.insert(memref.AllocaScopeReturnOp.build(operands=[write_results + reduce_contribs]))
 

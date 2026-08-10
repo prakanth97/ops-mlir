@@ -370,9 +370,16 @@ void opensbliblock00Kernel032(
 }
 
 struct opensbliblock00Kernel040_result {
-  double rhoE_B0, rhoE_RKold_B0, rho_B0, rho_RKold_B0,
-         rhou0_B0, rhou0_RKold_B0, rhou1_B0, rhou1_RKold_B0,
-         rhou2_B0, rhou2_RKold_B0;
+  double rhoE_B0;
+  double rhoE_RKold_B0;
+  double rho_B0; 
+  double rho_RKold_B0;
+  double rhou0_B0;
+  double rhou0_RKold_B0;
+  double rhou1_B0;
+  double rhou1_RKold_B0;
+  double rhou2_B0;
+  double rhou2_RKold_B0;
 };
 
 void opensbliblock00Kernel040(
