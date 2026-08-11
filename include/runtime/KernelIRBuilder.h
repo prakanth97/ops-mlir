@@ -24,6 +24,7 @@ public:
   mlir::func::FuncOp generate(const std::string &sourceFile,
                               const std::string &kernelName, int indexRank,
                               const std::map<std::string, const void *> &constants,
+                              const std::vector<int> &constArgDims,
                               llvm::raw_ostream &errs);
 
 private:

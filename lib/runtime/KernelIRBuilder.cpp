@@ -540,6 +540,7 @@ private:
 mlir::func::FuncOp KernelIRBuilder::generate(
     const std::string &sourceFile, const std::string &kernelName,
     int indexRank, const std::map<std::string, const void *> &constants,
+    const std::vector<int> &constArgDims,
     llvm::raw_ostream &errs) {
   auto codeOrErr = llvm::MemoryBuffer::getFile(sourceFile);
   if (!codeOrErr) {
@@ -603,8 +604,16 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     } else if (type->isPointerType() && type->getPointeeType()->isSpecificBuiltinType(clang::BuiltinType::Double) && type->getPointeeType().isConstQualified()) {
       // Read-only broadcast constant (const double *name)
       // Indexed via array subscript and never written through
+      std::size_t constIndex = constParams.size();
+      if (constIndex >= constArgDims.size()) {
+        errs << "KernelIRBuilder: no dimension registered for const "
+                "parameter #" << constIndex << " ('" << param->getNameAsString()
+            << "') of '" << kernelName << "' -- expected " << constArgDims.size()
+            << " const parameter(s) worth of dims\n";
+        return nullptr;
+      }
       constParams.push_back(param);
-      paramTypes.push_back(mlir::MemRefType::get({mlir::ShapedType::kDynamic}, builder.getF64Type()));
+      paramTypes.push_back(mlir::MemRefType::get({constArgDims[constIndex]}, builder.getF64Type()));
 
     } else if (type->isPointerType() && type->getPointeeType()->isSpecificBuiltinType(clang::BuiltinType::Double)) {
       // Reduction handle (double *name) - non-const

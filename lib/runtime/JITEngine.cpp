@@ -399,9 +399,24 @@ bool JITEngine::materializeKernelBody(const std::string &kernelName,
     return true;
   }
 
+  std::vector<int> constArgDims;
+  for (const LoopDesc &loop : queue_) {
+    if (loop.kernel_name != kernelName)
+      continue;
+    for (const ArgDesc &arg : loop.args) {
+      if (arg.argtype == OPS_ARG_GBL && arg.acc == OPS_READ) {
+        // NOTE: still relies on matching by declared C++ parameter name --
+        // see caveat below.
+        constArgDims.push_back(arg.dim);
+      }
+    }
+    break; // first matching loop's arg shapes are sufficient
+  }
+
+
   KernelIRBuilder kernelBuilder(ctx);
   mlir::func::FuncOp translatedFn = kernelBuilder.generate(
-      kernelSourceFile_, kernelName, indexRank, kernelConstants_, llvm::errs());
+      kernelSourceFile_, kernelName, indexRank, kernelConstants_, constArgDims, llvm::errs());
   if (!translatedFn) {
     llvm::errs() << "materializeKernelBody: could not translate '"
                  << kernelName << "' from " << kernelSourceFile_ << "\n";
