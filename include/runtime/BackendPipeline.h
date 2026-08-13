@@ -239,7 +239,7 @@ public:
   }
 
   llvm::Error transformLLVMModule(llvm::Module *m) const override {
-    return llvm::Error::success();  // NOTE: not sure if something specific needs to go here
+    return llvm::Error::success();  // TODO: not sure if something specific needs to go here
   }
 
 private:

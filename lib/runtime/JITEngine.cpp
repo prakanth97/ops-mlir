@@ -311,7 +311,7 @@ void JITEngine::runBackendLowering(mlir::ModuleOp module, Backend backend) {
     break;
   case Backend::ROCM:
 #ifdef OPS_ENABLE_ROCM
-    // NOTE: untested due to no hardware access
+    // TODO: untested due to no hardware access
     // May need an analogous function to 'detectNVGpuSm' for AMD GPUs
     pipeline = std::make_unique<RocmPipeline>(());
 #else
@@ -559,7 +559,7 @@ void JITEngine::synchronizeBackend(Backend backend) {
     return;
   case Backend::ROCM:
 #ifdef OPS_ENABLE_ROCM
-    // NOTE: not sure if this is the correct API
+    // TODO: not sure if this is the correct API
     hipDeviceSynchronize();
 #endif
     return;
