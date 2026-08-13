@@ -9,7 +9,7 @@
 
 #include "io.h"
 #include "opensbliblock00_kernels.h"
-// #include "reductions.h" // uses ACC<double> + ops_arg_reduce; ops_arg_reduce is not modeled by ops_to_stencil.py yet
+#include "reductions.h"
 
 FILE *f0 = fopen("block0_output.log", "a");
 
@@ -148,7 +148,6 @@ int main(int argc, char **argv) {
     start_iter = 0;
   }
   tstart = simulation_time;
-
   if (restart == 0) {
     int iteration_range_39_block0[] = {-5, block0np0 + 5, -5, block0np1 + 5,
                                        -5, block0np2 + 5};
@@ -367,14 +366,19 @@ int main(int argc, char **argv) {
           ops_arg_dat(Residual3_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW),
           ops_arg_dat(Residual4_B0, 1, stencil_0_00_00_00_3, "double", OPS_RW));
 
-      // NOT PORTED: opensbliblock00Kernel040 needs rkA[stage]/rkB[stage]
-      // (ops_arg_gbl), which ops_to_stencil.py does not model yet -- see
-      // opensbliblock00_kernels.h. Without this step the RK stage's
-      // Residual is computed above but never integrated back into
-      // rho_B0/rhou*_B0/rhoE_B0, so the solution does not actually advance.
+      // NaN error occurs when this function is uncommented.
+      // Currently can't find any issues that cause this, have checked:
+      // - Field bounds & halo sizing (asymmetric padding) - correct
+      // - Idx/coordinate recovery at interior & halo points - correct
+      // - Backend lowering stride computation - correct
+      // - Kernel039 (init) - verified clean via full-buffer scan
+      // - Kernel040 (RK integration) - translation verified 2 ways, not the cause
+      // - rkA/rkB values - stable & correct throughout
+      // - GBL/const-array plumbing - verified end-to-end, no swaps
+      // - Halo-transfer mechanism - confirmed it actually updates data
+      // - 002/004/006 struct ordering - correct
       //
-      // int iteration_range_40_block0[] = {0,         block0np0, 0,
-      //                                    block0np1, 0,         block0np2};
+      // int iteration_range_40_block0[] = {0, block0np0, 0, block0np1, 0, block0np2};
       // ops_par_loop(
       //     opensbliblock00Kernel040, "opensbliblock00Kernel040",
       //     opensbliblock00, 3, iteration_range_40_block0,
@@ -404,10 +408,8 @@ int main(int argc, char **argv) {
       //     ops_arg_gbl(&rkA[stage], 1, "double", OPS_READ),
       //     ops_arg_gbl(&rkB[stage], 1, "double", OPS_READ)
       //   );
-      // compile_and_execute();
 
       compile_and_execute();
-
       ops_halo_transfer(periodicBC_direction0_side0_33_block0);
       ops_halo_transfer(periodicBC_direction0_side1_34_block0);
       ops_halo_transfer(periodicBC_direction1_side0_35_block0);
@@ -585,33 +587,13 @@ int main(int argc, char **argv) {
       compile_and_execute();
     }
 
-    // NOT PORTED: this monitoring block needs ops_arg_reduce (OPS_INC),
-    // which ops_to_stencil.py does not model yet -- see the comment at the
-    // top of opensbliblock00_kernels.h and reductions.h.
-    //
-    // if (fmod(1 + iter, 100) == 0 || iter == 0) {
-    //   // Data access for simulation monitoring
-    //   if (iter == 0) {
-    //     ops_fprintf(f0, "Iteration, Time, p_B0(30, 30, 30)\n");
-    //   }
-    //   // Monitoring of p_B0
-    //   ops_reduction reduce_0_p_B0 = ops_decl_reduction_handle(
-    //       sizeof(double), "double", "reduction_0_p_B0");
-    //   double p_B0_0_output = 0.0;
-    //   int i00 = 30, j00 = 30, k00 = 30;
-    //   int monitor_range_0_p_B0[] = {i00, i00 + 1, j00, j00 + 1, k00, k00 + 1};
-    //   ops_par_loop(
-    //       monitor_0_p_B0, "monitor_0_p_B0", opensbliblock00, 3,
-    //       monitor_range_0_p_B0,
-    //       ops_arg_dat(p_B0, 1, stencil_0_00_00_00_3, "double", OPS_READ),
-    //       ops_arg_reduce(reduce_0_p_B0, 1, "double", OPS_INC));
-    //   compile_and_execute();
-    //   ops_reduction_result(reduce_0_p_B0, &p_B0_0_output);
-    //
-    //   // Write the output values
-    //   ops_fprintf(f0, "%d, %.12e, %.12e\n", iter + 1, simulation_time,
-    //               p_B0_0_output);
-    // }
+    if (fmod(1 + iter, 100) == 0 || iter == 0) {
+      if (iter == 0) {
+        ops_fprintf(f0, "Iteration, Time, p_B0(30, 30, 30)\n");
+      }
+      double p_B0_0_output = readDatValueAt(p_B0, 30, 30, 30);
+      ops_fprintf(f0, "%d, %.12e, %.12e\n", iter + 1, simulation_time, p_B0_0_output);
+    }
 
     if (fmod(1 + iter, write_output_file) == 0 || iter == 0) {
       HDF5_IO_Write_0_opensbliblock00_dynamic(opensbliblock00, iter, rho_B0,

@@ -47,6 +47,13 @@ static cl::list<std::string> IntConsts(
             "(repeatable)"),
     cl::value_desc("name=value"));
 
+static cl::list<std::string> ConstDims(
+    "const-dim",
+    cl::desc("Register the array dimension for a `const double*` "
+            "parameter, as name=dim (repeatable, required for kernels "
+            "with const-array parameters)"),
+    cl::value_desc("name=dim"));
+
 static bool splitNameValue(const std::string &arg, std::string &name,
                            std::string &value) {
   auto pos = arg.find('=');
@@ -105,10 +112,14 @@ int main(int argc, char **argv) {
     intStorage.push_back(std::make_unique<int32_t>(std::stoi(value)));
     constants[name] = intStorage.back().get();
   }
+  std::vector<int> constArgDims;
+  for (const std::string &arg : ConstDims)
+    constArgDims.push_back(std::stoi(arg));
+  
 
   ops_mlir::KernelIRBuilder builder(ctx);
   mlir::func::FuncOp fn =
-      builder.generate(SourceFile, KernelName, IndexRank, constants, errs());
+      builder.generate(SourceFile, KernelName, IndexRank, constants, constArgDims, errs());
   if (!fn) {
     errs() << "kernel-ir-dump: failed to translate '" << KernelName.getValue()
           << "' from '" << SourceFile.getValue() << "'\n";

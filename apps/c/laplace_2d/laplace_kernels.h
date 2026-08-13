@@ -22,6 +22,8 @@ double right_bndcon(const int *idx) {
   return sin(pi * (idx[1] + 1) / (jmax + 1)) * exp(-pi);
 }
 
-double apply_stencil(double a, double b, double c, double d, double e) {
-  return 0.25f * (b + c + d + e);
+double apply_stencil(double a, double b, double c, double d, double e, double *error) {
+  double anew = 0.25f * (b + c + d + e);
+  *error = fmax(*error, fabs(anew - a));
+  return anew;
 }

@@ -28,6 +28,12 @@ namespace ops_mlir {
 
 namespace {
 
+/// Shared empty placeholders for ExprEmitter's outFields_/outFieldValues_
+/// parameters, used at call sites with no out-pointer context (the
+/// single-`return`-expression kernel shape has no out-pointer at all)
+static const llvm::SmallVector<const clang::FieldDecl *> kNoOutFields;
+static const llvm::SmallVector<mlir::Value> kNoOutFieldValues;
+
 class KernelFunctionFinder
     : public clang::RecursiveASTVisitor<KernelFunctionFinder> {
 public:
@@ -98,6 +104,40 @@ static MathOpBuilder lookupMathFunction(llvm::StringRef name) {
   return it == kTable.end() ? nullptr : it->second;
 }
 
+/// Recognises `*reduceParam = combiner(a, b)` where exactly one of a/b is
+/// a dereference of reduceParam, and returns the other (non-self-
+/// referential) argument.(I.e. '*error = fabs(*error, anew - a)')
+/// The combiner's identity/kind (max/min/add) is already known from the OPS
+/// dialect's access mode, so it is deliberately not matched by name here.
+static const clang::Expr *extractReductionContribution(
+    const clang::Expr *rhs, const clang::ParmVarDecl *reduceParam,
+    llvm::raw_ostream &errs) {
+  const auto *call = llvm::dyn_cast<clang::CallExpr>(rhs->IgnoreParenImpCasts());
+  if (!call || call->getNumArgs() != 2) {
+    errs << "KernelIRBuilder: reduction write to '"
+        << reduceParam->getNameAsString()
+        << "' must be `*param = combiner(a, b)` with exactly 2 arguments\n";
+    return nullptr;
+  }
+  auto isDerefOfParam = [&](const clang::Expr *e) {
+    const auto *unary =
+        llvm::dyn_cast<clang::UnaryOperator>(e->IgnoreParenImpCasts());
+    if (!unary || unary->getOpcode() != clang::UO_Deref)
+      return false;
+    const auto *ref = llvm::dyn_cast<clang::DeclRefExpr>(
+        unary->getSubExpr()->IgnoreParenImpCasts());
+    return ref && ref->getDecl() == reduceParam;
+  };
+  bool arg0IsSelf = isDerefOfParam(call->getArg(0));
+  bool arg1IsSelf = isDerefOfParam(call->getArg(1));
+  if (arg0IsSelf == arg1IsSelf) {
+    errs << "KernelIRBuilder: could not identify the self-referential "
+            "operand in the reduction combiner for '"
+        << reduceParam->getNameAsString() << "'\n";
+    return nullptr;
+  }
+  return arg0IsSelf ? call->getArg(1) : call->getArg(0);
+}
 
 // TODO: Support more than just `double` kernel parameters and locals.
 static bool isDoubleStructPointer(
@@ -123,9 +163,13 @@ public:
   ExprEmitter(mlir::OpBuilder &builder, mlir::Location loc,
               const std::map<const clang::ValueDecl *, mlir::Value> &values,
               const std::map<std::string, const void *> &constants,
+              const clang::ParmVarDecl *outParam,
+              const llvm::SmallVectorImpl<const clang::FieldDecl *> &outFields,
+              const llvm::SmallVectorImpl<mlir::Value> &outFieldValues,
               llvm::raw_ostream &errs)
       : builder_(builder), loc_(loc), values_(values),
-        constants_(constants), errs_(errs) {}
+        constants_(constants), outParam_(outParam), outFields_(outFields),
+        outFieldValues_(outFieldValues), errs_(errs) {}
 
   bool ok() const { return ok_; }
 
@@ -248,6 +292,33 @@ public:
     return fail(stmt, "unsupported expression construct");
   }
 
+  mlir::Value VisitMemberExpr(const clang::MemberExpr *expr) {
+    if (!expr->isArrow() || !outParam_)
+      return fail(expr, "member access is only supported for the "
+                        "out-pointer parameter's fields");
+    const auto *base = llvm::dyn_cast<clang::DeclRefExpr>(
+        expr->getBase()->IgnoreParenImpCasts());
+    if (!base || base->getDecl() != outParam_)
+      return fail(expr, "member access base must be the kernel's "
+                        "out-pointer parameter");
+    const auto *field = llvm::dyn_cast<clang::FieldDecl>(expr->getMemberDecl());
+    auto it = field ? llvm::find(outFields_, field) : outFields_.end();
+    if (it == outFields_.end())
+      return fail(expr, "'" + expr->getMemberDecl()->getNameAsString() +
+                            "' is read before being written in this "
+                            "kernel (out-pointer fields can only be read "
+                            "after they've been assigned earlier in the "
+                            "same kernel body)");
+    std::size_t idx = std::distance(outFields_.begin(), it);
+    if (!outFieldValues_[idx])
+      return fail(expr, "'" + expr->getMemberDecl()->getNameAsString() +
+                            "' is read before being written in this "
+                            "kernel (out-pointer fields can only be read "
+                            "after they've been assigned earlier in the "
+                            "same kernel body)");
+    return outFieldValues_[idx];
+  }
+
   mlir::Value fail(const clang::Stmt *at, const llvm::Twine &message) {
     if (ok_) {
       ok_ = false;
@@ -328,6 +399,9 @@ private:
   const std::map<const clang::ValueDecl *, mlir::Value> &values_;
   const std::map<std::string, const void *> &constants_;
   llvm::raw_ostream &errs_;
+  const clang::ParmVarDecl *outParam_;
+  const llvm::SmallVectorImpl<const clang::FieldDecl *> &outFields_;
+  const llvm::SmallVectorImpl<mlir::Value> &outFieldValues_;
   bool ok_ = true;
 };
 
@@ -348,7 +422,7 @@ public:
               llvm::raw_ostream &errs)
       : builder_(builder), loc_(loc), values_(values), constants_(constants),
         outParam_(outParam), outMemref_(outMemref), outFields_(outFields),
-        errs_(errs) {}
+        outFieldValues_(outFields.size()), errs_(errs) {}
 
   bool ok() const { return ok_; }
 
@@ -387,7 +461,7 @@ private:
                             "' must be initialized at declaration");
         return;
       }
-      ExprEmitter emitter(builder_, loc_, values_, constants_, errs_);
+      ExprEmitter emitter(builder_, loc_, values_, constants_, outParam_, outFields_, outFieldValues_, errs_);
       mlir::Value v = emitter.Visit(var->getInit());
       if (!emitter.ok()) {
         ok_ = false;
@@ -424,7 +498,7 @@ private:
     }
     std::size_t fieldIndex = std::distance(outFields_.begin(), it);
 
-    ExprEmitter emitter(builder_, loc_, values_, constants_, errs_);
+    ExprEmitter emitter(builder_, loc_, values_, constants_, outParam_, outFields_, outFieldValues_, errs_);
     mlir::Value rhs = emitter.Visit(bin->getRHS());
     if (!emitter.ok()) {
       ok_ = false;
@@ -435,6 +509,7 @@ private:
         loc_, builder_.getIndexAttr(static_cast<int64_t>(fieldIndex)));
     builder_.create<mlir::memref::StoreOp>(loc_, rhs, outMemref_,
                                            mlir::ValueRange{index});
+    outFieldValues_[fieldIndex] = rhs;  
   }
 
   void fail(const clang::Stmt *, const llvm::Twine &message) {
@@ -451,6 +526,7 @@ private:
   const clang::ParmVarDecl *outParam_;
   mlir::Value outMemref_;
   const llvm::SmallVectorImpl<const clang::FieldDecl *> &outFields_;
+  llvm::SmallVector<mlir::Value> outFieldValues_;
   llvm::raw_ostream &errs_;
   bool ok_ = true;
 };
@@ -464,6 +540,7 @@ private:
 mlir::func::FuncOp KernelIRBuilder::generate(
     const std::string &sourceFile, const std::string &kernelName,
     int indexRank, const std::map<std::string, const void *> &constants,
+    const std::vector<int> &constArgDims,
     llvm::raw_ostream &errs) {
   auto codeOrErr = llvm::MemoryBuffer::getFile(sourceFile);
   if (!codeOrErr) {
@@ -515,6 +592,8 @@ mlir::func::FuncOp KernelIRBuilder::generate(
   mlir::Location loc = builder.getUnknownLoc();
 
   llvm::SmallVector<mlir::Type, 4> paramTypes;
+  llvm::SmallVector<const clang::ParmVarDecl *, 2> reduceParams;
+  llvm::SmallVector<const clang::ParmVarDecl *, 2> constParams;
   const clang::ParmVarDecl *outParam = nullptr;
   llvm::SmallVector<const clang::FieldDecl *, 8> outFields;
   for (const clang::ParmVarDecl *param : decl->parameters()) {
@@ -522,6 +601,24 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     llvm::SmallVector<const clang::FieldDecl *, 8> fields;
     if (type->isSpecificBuiltinType(clang::BuiltinType::Double)) {
       paramTypes.push_back(builder.getF64Type());
+    } else if (type->isPointerType() && type->getPointeeType()->isSpecificBuiltinType(clang::BuiltinType::Double) && type->getPointeeType().isConstQualified()) {
+      // Read-only broadcast constant (const double *name)
+      // Indexed via array subscript and never written through
+      std::size_t constIndex = constParams.size();
+      if (constIndex >= constArgDims.size()) {
+        errs << "KernelIRBuilder: no dimension registered for const "
+                "parameter #" << constIndex << " ('" << param->getNameAsString()
+            << "') of '" << kernelName << "' -- expected " << constArgDims.size()
+            << " const parameter(s) worth of dims\n";
+        return nullptr;
+      }
+      constParams.push_back(param);
+      paramTypes.push_back(mlir::MemRefType::get({constArgDims[constIndex]}, builder.getF64Type()));
+
+    } else if (type->isPointerType() && type->getPointeeType()->isSpecificBuiltinType(clang::BuiltinType::Double)) {
+      // Reduction handle (double *name) - non-const
+      reduceParams.push_back(param);
+      paramTypes.push_back(mlir::MemRefType::get({}, builder.getF64Type()));
     } else if (type->isPointerType() &&
               type->getPointeeType()->isSpecificBuiltinType(
                   clang::BuiltinType::Int)) {
@@ -552,8 +649,13 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     return nullptr;
   }
 
+  llvm::SmallVector<mlir::Type, 2> resultTypeVec;
+  if (isDoubleReturn) {
+    resultTypeVec.push_back(builder.getF64Type());
+    resultTypeVec.append(reduceParams.size(), builder.getF64Type());
+  }
   mlir::TypeRange resultTypes =
-      isDoubleReturn ? mlir::TypeRange{builder.getF64Type()} : mlir::TypeRange{};
+      isDoubleReturn ? mlir::TypeRange{resultTypeVec} : mlir::TypeRange{};
   auto funcType = builder.getFunctionType(paramTypes, resultTypes);
   auto funcOp = mlir::func::FuncOp::create(loc, kernelName, funcType);
   funcOp.setPrivate();
@@ -573,27 +675,86 @@ mlir::func::FuncOp KernelIRBuilder::generate(
   }
 
   if (isDoubleReturn) {
-    // Kernels in this codebase with a single write are a single
-    // `return <expr>;` -- anything richer is out of scope for this shape
-    // (use the void out-pointer shape instead for multiple writes/locals).
-    const clang::ReturnStmt *ret =
-        (body->size() == 1) ? llvm::dyn_cast<clang::ReturnStmt>(*body->body_begin())
-                             : nullptr;
+    const clang::ReturnStmt *ret = nullptr;
+    std::map<const clang::ParmVarDecl *, mlir::Value> contributions;
+
+    for (const clang::Stmt *stmt : body->body()) {
+      if (const auto *declStmt = llvm::dyn_cast<clang::DeclStmt>(stmt)) {
+        for (const clang::Decl *d : declStmt->decls()) {
+          const auto *var = llvm::dyn_cast<clang::VarDecl>(d);
+          if (!var || !var->hasInit() ||
+              !var->getType()->isSpecificBuiltinType(clang::BuiltinType::Double)) {
+            errs << "KernelIRBuilder: local declarations must be initialized "
+                    "`double`\n";
+            funcOp.erase();
+            return nullptr;
+          }
+          ExprEmitter emitter(builder, loc, values, constants, /*outParam=*/nullptr, kNoOutFields, kNoOutFieldValues, errs);
+          mlir::Value v = emitter.Visit(var->getInit());
+          if (!emitter.ok()) { funcOp.erase(); return nullptr; }
+          values[var] = v;
+        }
+      } else if (const auto *bin = llvm::dyn_cast<clang::BinaryOperator>(stmt)) {
+        if (bin->getOpcode() != clang::BO_Assign) {
+          errs << "KernelIRBuilder: unsupported statement (only locals, "
+                  "reduction writes, and a final return are supported)\n";
+          funcOp.erase();
+          return nullptr;
+        }
+        const auto *unary = llvm::dyn_cast<clang::UnaryOperator>(
+            bin->getLHS()->IgnoreParenImpCasts());
+        const clang::ParmVarDecl *target = nullptr;
+        if (unary && unary->getOpcode() == clang::UO_Deref) {
+          if (const auto *ref = llvm::dyn_cast<clang::DeclRefExpr>(
+                  unary->getSubExpr()->IgnoreParenImpCasts()))
+            target = llvm::dyn_cast<clang::ParmVarDecl>(ref->getDecl());
+        }
+        if (!target || !llvm::is_contained(reduceParams, target)) {
+          errs << "KernelIRBuilder: assignment target must be a reduction "
+                  "parameter dereference (`*error = ...`)\n";
+          funcOp.erase();
+          return nullptr;
+        }
+        const clang::Expr *contribExpr =
+            extractReductionContribution(bin->getRHS(), target, errs);
+        if (!contribExpr) { funcOp.erase(); return nullptr; }
+
+        ExprEmitter emitter(builder, loc, values, constants, /*outParam=*/nullptr, kNoOutFields, kNoOutFieldValues, errs);
+        mlir::Value v = emitter.Visit(contribExpr);
+        if (!emitter.ok()) { funcOp.erase(); return nullptr; }
+        contributions[target] = v;
+      } else if (const auto *r = llvm::dyn_cast<clang::ReturnStmt>(stmt)) {
+        ret = r;
+      } else {
+        errs << "KernelIRBuilder: unsupported statement in kernel body\n";
+        funcOp.erase();
+        return nullptr;
+      }
+    }
+
     if (!ret || !ret->getRetValue()) {
       errs << "KernelIRBuilder: '" << kernelName
-          << "' must be a single `return <expr>;` statement\n";
+          << "' must end with `return <expr>;`\n";
       funcOp.erase();
       return nullptr;
     }
+    ExprEmitter retEmitter(builder, loc, values, constants, /*outParam=*/nullptr, kNoOutFields, kNoOutFieldValues, errs);
+    mlir::Value mainResult = retEmitter.Visit(ret->getRetValue());
+    if (!retEmitter.ok()) { funcOp.erase(); return nullptr; }
 
-    ExprEmitter emitter(builder, loc, values, constants, errs);
-    mlir::Value result = emitter.Visit(ret->getRetValue());
-    if (!emitter.ok()) {
-      funcOp.erase();
-      return nullptr;
+    llvm::SmallVector<mlir::Value, 2> results{mainResult};
+    for (const clang::ParmVarDecl *rp : reduceParams) {
+      auto it = contributions.find(rp);
+      if (it == contributions.end()) {
+        errs << "KernelIRBuilder: reduction parameter '" << rp->getNameAsString()
+            << "' was never written\n";
+        funcOp.erase();
+        return nullptr;
+      }
+      results.push_back(it->second);
     }
 
-    builder.create<mlir::func::ReturnOp>(loc, result);
+    builder.create<mlir::func::ReturnOp>(loc, results);
     return funcOp;
   }
 

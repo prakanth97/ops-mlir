@@ -34,6 +34,7 @@ int failures = 0;
 mlir::func::FuncOp translate(mlir::MLIRContext &ctx, const std::string &source,
                              const std::string &kernelName, int indexRank,
                              const std::map<std::string, const void *> &constants,
+                             const std::vector<int> &constArgDims,
                              std::string &diagnostics) {
   llvm::SmallString<128> path;
   llvm::sys::fs::createTemporaryFile("kernel_ir_builder_test", "h", path);
@@ -45,7 +46,7 @@ mlir::func::FuncOp translate(mlir::MLIRContext &ctx, const std::string &source,
   llvm::raw_string_ostream errs(diagnostics);
   ops_mlir::KernelIRBuilder builder(ctx);
   mlir::func::FuncOp fn = builder.generate(path.str().str(), kernelName,
-                                           indexRank, constants, errs);
+                                           indexRank, constants, constArgDims, errs);
   errs.flush();
   llvm::sys::fs::remove(path);
   return fn;
@@ -73,10 +74,11 @@ void expectSuccessContaining(mlir::MLIRContext &ctx, const std::string &testName
                              const std::string &source,
                              const std::string &kernelName, int indexRank,
                              const std::map<std::string, const void *> &constants,
-                             const std::vector<std::string> &expectedSubstrings) {
+                             const std::vector<std::string> &expectedSubstrings,
+                             const std::vector<int> &constArgDims = {}) {
   std::string diagnostics;
   mlir::func::FuncOp fn =
-      translate(ctx, source, kernelName, indexRank, constants, diagnostics);
+      translate(ctx, source, kernelName, indexRank, constants, constArgDims, diagnostics);
   if (!fn) {
     check(false, testName, "expected success but generate() failed: " + diagnostics);
     return;
@@ -93,10 +95,11 @@ void expectFailureContaining(mlir::MLIRContext &ctx, const std::string &testName
                              const std::string &source,
                              const std::string &kernelName, int indexRank,
                              const std::map<std::string, const void *> &constants,
-                             const std::string &expectedDiagnostic) {
+                             const std::string &expectedDiagnostic,
+                             const std::vector<int> &constArgDims = {}) {
   std::string diagnostics;
   mlir::func::FuncOp fn =
-      translate(ctx, source, kernelName, indexRank, constants, diagnostics);
+      translate(ctx, source, kernelName, indexRank, constants, constArgDims, diagnostics);
   if (fn) {
     check(false, testName, "expected failure but generate() succeeded:\n" +
                                printOp(fn));

@@ -117,20 +117,24 @@ int main(int argc, const char **argv) {
 
   int iter = 0;
 
-  while (iter < iter_max) {
+ while (error > tol && iter < iter_max) {
     int interior_range[] = {0,imax,0,jmax};
     ops_par_loop(apply_stencil, "apply_stencil", block, 2, interior_range,
         ops_arg_dat(d_A,    1, S2D_5pt, "double", OPS_READ),
         ops_arg_dat(d_Anew, 1, S2D_00, "double", OPS_WRITE),
         ops_arg_reduce(h_err, 1, "double", OPS_MAX));
-      
+
     ops_par_loop(copy, "copy", block, 2, interior_range,
         ops_arg_dat(d_A,    1, S2D_00, "double", OPS_WRITE),
         ops_arg_dat(d_Anew, 1, S2D_00, "double", OPS_READ));
-
+            
     compile_and_execute();
+    ops_reduction_result(h_err, &error);
+    if(iter % 10 == 0) ops_printf("%5d, %0.6f\n", iter, error);        
     ++iter;
-  }
+}
+
+  ops_printf("%5d, %0.6f\n", iter, error); 
 
   double *anew_data = reinterpret_cast<double *>(d_Anew->data);
   int stride = d_Anew->size[1];
@@ -145,6 +149,12 @@ int main(int argc, const char **argv) {
   ops_printf("Jacobi relaxation Calculation: %d x %d mesh\n", imax + 2,
              jmax + 2);
 
+  double err_diff = fabs((100.0*(error/2.421354960840227e-03))-100.0);
+  printf("Total error is within %3.15E %% of the expected error\n",err_diff);
+  if(err_diff < 0.001)
+    printf("This run is considered PASSED\n");
+  else
+    printf("This test is considered FAILED\n");
   // Finalising the OPS library
   free(A);
   free(Anew);

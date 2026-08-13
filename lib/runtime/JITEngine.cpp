@@ -400,9 +400,24 @@ bool JITEngine::materializeKernelBody(const std::string &kernelName,
     return true;
   }
 
+  std::vector<int> constArgDims;
+  for (const LoopDesc &loop : queue_) {
+    if (loop.kernel_name != kernelName)
+      continue;
+    for (const ArgDesc &arg : loop.args) {
+      if (arg.argtype == OPS_ARG_GBL && arg.acc == OPS_READ) {
+        // NOTE: still relies on matching by declared C++ parameter name --
+        // see caveat below.
+        constArgDims.push_back(arg.dim);
+      }
+    }
+    break; // first matching loop's arg shapes are sufficient
+  }
+
+
   KernelIRBuilder kernelBuilder(ctx);
   mlir::func::FuncOp translatedFn = kernelBuilder.generate(
-      kernelSourceFile_, kernelName, indexRank, kernelConstants_, llvm::errs());
+      kernelSourceFile_, kernelName, indexRank, kernelConstants_, constArgDims, llvm::errs());
   if (!translatedFn) {
     llvm::errs() << "materializeKernelBody: could not translate '"
                  << kernelName << "' from " << kernelSourceFile_ << "\n";
@@ -711,11 +726,23 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
     std::string funcName =
         "ops_par_loop_" + loop.kernel_name + "_" + std::to_string(i);
 
-    std::vector<void *> datPtrs;
+    std::vector<void *> argPtrs;
     std::vector<std::pair<std::uintptr_t, std::size_t>> writebacks;
     for (const ArgDesc &arg : loop.args) {
-      if (arg.argtype != OPS_ARG_DAT)
+      if (arg.argtype != OPS_ARG_DAT && arg.argtype != OPS_ARG_GBL)
         continue;
+
+      if (arg.argtype == OPS_ARG_GBL) {
+        if (arg.acc == OPS_READ) {
+          // Broadcast read-only constant
+          argPtrs.push_back(reinterpret_cast<void *>(arg.data));
+        } else {
+          ops_reduction handle = reinterpret_cast<ops_reduction>(arg.data);
+          argPtrs.push_back(reinterpret_cast<void *>(handle->data));
+
+        }
+        continue;
+      }
 
       if (backend_ == Backend::CUDA) {
         std::size_t bytes = datByteSize(arg.dat);
@@ -726,18 +753,17 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
           this->flush();
           return;
         }
-        datPtrs.push_back(reinterpret_cast<void *>(devPtr));
+        argPtrs.push_back(reinterpret_cast<void *>(devPtr));
         if (arg.acc == OPS_WRITE || arg.acc == OPS_RW || arg.acc == OPS_INC)
           writebacks.emplace_back(arg.data, bytes);
       } else {
-        datPtrs.push_back(reinterpret_cast<void *>(arg.data));
+        argPtrs.push_back(reinterpret_cast<void *>(arg.data));
       }
     }
 
     llvm::SmallVector<void *> packedArgs;
-    packedArgs.reserve(datPtrs.size());
-
-    for (void *&ptr : datPtrs) {
+    packedArgs.reserve(argPtrs.size());
+    for (void *&ptr : argPtrs) {
       packedArgs.push_back(&ptr);
     }
 
