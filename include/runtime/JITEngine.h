@@ -220,6 +220,12 @@ public:
 
   void invalidateDeviceBuffer(std::uintptr_t hostPtr);
 
+  void syncHostBuffer(ops_dat dat);
+
+  void syncAllHostBuffers();
+
+  bool haloTransferDevice(ops_halo_group group);
+
   void shutdown();
 
   // Returns a persistent CUDA stream (CUstream) for kernels to launch on.
@@ -242,20 +248,28 @@ private:
 
   // Host ops_dat pointer -> cached device buffer (stored as uintptr_t to
   // keep this header CUDA-toolkit-header-free; only populated/used when
-  // built with OPS_ENABLE_CUDA). `dirty` means the device copy no longer
-  // reflects the host buffer and must be re-copied before next use --
-  // see invalidateDeviceBuffers().
+  // built with OPS_ENABLE_CUDA).
+  //  - `dirty`: the device copy is stale relative to the host buffer and
+  //    must be re-copied (HtoD) before the device buffer is next used --
+  //    set by invalidateDeviceBuffer() (host-side halo fallback).
+  //  - `hostDirty`: the host copy is stale relative to the device buffer
+  //    and must be re-copied (DtoH) before host code reads dat->data --
+  //    set after a kernel writes the dat, or after a device-resident halo
+  //    exchange writes it; cleared lazily by syncHostBuffer().
   struct DeviceBufferEntry {
     std::uintptr_t devPtr;
+    std::size_t bytes = 0;
     bool dirty = false;
+    bool hostDirty = false;
   };
   std::map<std::uintptr_t, DeviceBufferEntry> deviceBuffers_;
 };
 
 // Forwards to the real ops_halo_transfer (linked in from the OPS host
-// library) and then invalidates JITEngine's CUDA device-buffer cache --
-// see JITEngine::invalidateDeviceBuffers's comment for why. OPSWrapper.h
-// #defines ops_halo_transfer to route call sites through this.
+// library) -- unless the CUDA backend can service the whole group on-device
+// (see JITEngine::haloTransferDevice), in which case the host copy is
+// skipped entirely and dats keep flowing GPU-only. OPSWrapper.h #defines
+// ops_halo_transfer to route call sites through this.
 void haloTransferIntercepted(ops_halo_group group);
 
 void exitIntercepted();

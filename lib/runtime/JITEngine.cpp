@@ -31,6 +31,7 @@
 #include "llvm/TargetParser/Host.h"
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 
 #ifdef OPS_ENABLE_CUDA
@@ -435,6 +436,36 @@ static std::size_t datByteSize(const DatDesc &dat) {
   return total;
 }
 
+static double computeDataTransfer(const LoopDesc &loop, const ArgDesc &arg) {
+  // stencil->stride is a per-dimension array (size loop.dims), not per-point:
+  // stride[i] == 0 means the stencil doesn't move along dimension i (e.g. a
+  // boundary condition applied on a single edge), so that axis shouldn't
+  // contribute its full iteration extent -- mirrors OPS's own
+  // ops_compute_transfer().
+  const int *stencilStride =
+      reinterpret_cast<const int *>(arg.stencil.stride);
+
+  double size = 1.0;
+  for (int i = 0; i < loop.dims; ++i) {
+    int64_t extent = loop.range[2 * i + 1] - loop.range[2 * i];
+    bool moves = !stencilStride || stencilStride[i] != 0;
+    if (moves && extent > 0)
+      size *= static_cast<double>(extent);
+  }
+  size *= arg.dat.elem_size *
+          ((arg.acc == OPS_READ || arg.acc == OPS_WRITE) ? 1.0 : 2.0);
+  return size;
+}
+
+static double computeDataTransferPerLoop(const LoopDesc &loop) {
+  double bytes = 0.0;
+  for (const ArgDesc &arg : loop.args) {
+    if (arg.argtype == OPS_ARG_DAT)
+      bytes += computeDataTransfer(loop, arg);
+  }
+  return bytes;
+}
+
 std::uintptr_t JITEngine::ensureDeviceBuffer(std::uintptr_t hostPtr,
                                              std::size_t bytes) {
 #ifdef OPS_ENABLE_CUDA
@@ -471,7 +502,7 @@ std::uintptr_t JITEngine::ensureDeviceBuffer(std::uintptr_t hostPtr,
                  << ")\n";
     return 0;
   }
-  deviceBuffers_[hostPtr] = {static_cast<std::uintptr_t>(devPtr), false};
+  deviceBuffers_[hostPtr] = {static_cast<std::uintptr_t>(devPtr), bytes, false, false};
   cuMemcpyHtoD(devPtr, reinterpret_cast<const void *>(hostPtr), bytes);
   return devPtr;
 #else
@@ -514,8 +545,136 @@ void JITEngine::invalidateDeviceBuffer(std::uintptr_t hostPtr) {
     it->second.dirty = true;
 }
 
+void JITEngine::syncHostBuffer(ops_dat dat) {
+#ifdef OPS_ENABLE_CUDA
+  auto it = deviceBuffers_.find(reinterpret_cast<std::uintptr_t>(dat->data));
+  if (it == deviceBuffers_.end() || !it->second.hostDirty)
+    return;
+  cuMemcpyDtoH(reinterpret_cast<void *>(dat->data), it->second.devPtr,
+              it->second.bytes);
+  it->second.hostDirty = false;
+#else
+  (void)dat;
+#endif
+}
+
+void JITEngine::syncAllHostBuffers() {
+#ifdef OPS_ENABLE_CUDA
+  for (auto &[hostPtr, entry] : deviceBuffers_) {
+    if (!entry.hostDirty)
+      continue;
+    cuMemcpyDtoH(reinterpret_cast<void *>(hostPtr), entry.devPtr, entry.bytes);
+    entry.hostDirty = false;
+  }
+#endif
+}
+
+#ifdef OPS_ENABLE_CUDA
+static std::size_t opsDatByteSize(ops_dat dat) {
+  std::size_t total = static_cast<std::size_t>(dat->elem_size);
+  for (int i = 0; i < dat->block->dims; ++i)
+    total *= static_cast<std::size_t>(dat->size[i]);
+  return total;
+}
+#endif
+
+bool JITEngine::haloTransferDevice(ops_halo_group group) {
+#ifdef OPS_ENABLE_CUDA
+  if (backend_ != Backend::CUDA)
+    return false;
+
+  // Only handle the plain periodic-shift case every halo in this app uses:
+  // identity from_dir/to_dir (no axis permutation, no reversal). Anything
+  // else (mirror/transpose halos) needs the general strided-copy logic the
+  // host path already has -- bail out so the caller falls back to it.
+  for (int h = 0; h < group->nhalos; ++h) {
+    ops_halo halo = group->halos[h];
+    int dims = halo->from->block->dims;
+    if (dims != 3)
+      return false;
+    for (int i = 0; i < dims; ++i)
+      if (halo->from_dir[i] != i + 1 || halo->to_dir[i] != i + 1)
+        return false;
+    if (halo->from->type_size != halo->to->type_size ||
+        halo->from->elem_size != halo->to->elem_size)
+      return false;
+  }
+
+  for (int h = 0; h < group->nhalos; ++h) {
+    ops_halo halo = group->halos[h];
+    ops_dat from = halo->from;
+    ops_dat to = halo->to;
+    int dims = from->block->dims;
+    int elemSize = from->elem_size;
+
+    std::uintptr_t fromDev = ensureDeviceBuffer(
+        reinterpret_cast<std::uintptr_t>(from->data), opsDatByteSize(from));
+    std::uintptr_t toDev = ensureDeviceBuffer(
+        reinterpret_cast<std::uintptr_t>(to->data), opsDatByteSize(to));
+    if (!fromDev || !toDev)
+      return false;
+
+    // Same local-index-origin arithmetic the sequential ops_halo_transfer
+    // uses for its positive-direction branch (ops_host_singlenode.cpp) --
+    // valid here because we've just confirmed from_dir/to_dir are identity.
+    long long fromStart[3] = {0, 0, 0}, toStart[3] = {0, 0, 0};
+    long long extent[3] = {1, 1, 1};
+    for (int i = 0; i < dims; ++i) {
+      fromStart[i] = halo->from_base[i] - from->d_m[i] - from->base[i];
+      toStart[i] = halo->to_base[i] - to->d_m[i] - to->base[i];
+      extent[i] = halo->iter_size[i];
+    }
+
+    CUDA_MEMCPY3D cpy;
+    memset(&cpy, 0, sizeof(cpy));
+    cpy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+    cpy.srcDevice = static_cast<CUdeviceptr>(fromDev);
+    cpy.srcXInBytes = static_cast<std::size_t>(fromStart[0]) * elemSize;
+    cpy.srcY = static_cast<std::size_t>(fromStart[1]);
+    cpy.srcZ = static_cast<std::size_t>(fromStart[2]);
+    cpy.srcPitch = static_cast<std::size_t>(from->size[0]) * elemSize;
+    cpy.srcHeight = static_cast<std::size_t>(from->size[1]);
+
+    cpy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+    cpy.dstDevice = static_cast<CUdeviceptr>(toDev);
+    cpy.dstXInBytes = static_cast<std::size_t>(toStart[0]) * elemSize;
+    cpy.dstY = static_cast<std::size_t>(toStart[1]);
+    cpy.dstZ = static_cast<std::size_t>(toStart[2]);
+    cpy.dstPitch = static_cast<std::size_t>(to->size[0]) * elemSize;
+    cpy.dstHeight = static_cast<std::size_t>(to->size[1]);
+
+    cpy.WidthInBytes = static_cast<std::size_t>(extent[0]) * elemSize;
+    cpy.Height = static_cast<std::size_t>(extent[1]);
+    cpy.Depth = static_cast<std::size_t>(extent[2]);
+
+    if (CUresult rc = cuMemcpy3D(&cpy); rc != CUDA_SUCCESS) {
+      llvm::errs() << "haloTransferDevice: cuMemcpy3D failed (CUresult "
+                   << rc << ")\n";
+      return false;
+    }
+
+    auto it = deviceBuffers_.find(reinterpret_cast<std::uintptr_t>(to->data));
+    if (it != deviceBuffers_.end()) {
+      it->second.dirty = false;    // device copy is authoritative now
+      it->second.hostDirty = true; // ...and the host copy no longer is
+    }
+  }
+  return true;
+#else
+  (void)group;
+  return false;
+#endif
+}
+
 void haloTransferIntercepted(ops_halo_group group) {
+  if (JITEngine::instance().haloTransferDevice(group))
+    return;
+
+  for (int i = 0; i < group->nhalos; ++i)
+    JITEngine::instance().syncHostBuffer(group->halos[i]->from);
+
   ::ops_halo_transfer(group);
+
   // Only the dats this group actually writes (`to`) need invalidating --
   // `from` isn't mutated by the copy, and every other cached dat is
   // untouched by this call. See invalidateDeviceBuffer's comment for why
@@ -532,6 +691,7 @@ void JITEngine::shutdown() {
 }
 
 void exitIntercepted() {
+  JITEngine::instance().syncAllHostBuffers();
   JITEngine::instance().shutdown();
   ::ops_exit();
 }
@@ -619,11 +779,14 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
       return;
     }
     synchronizeBackend(backend_);
-    profiler_.end(loop.kernel_name, kernelStart);
+    profiler_.end(loop.kernel_name, kernelStart, computeDataTransferPerLoop(loop));
 #ifdef OPS_ENABLE_CUDA
     for (const auto &[hostPtr, bytes] : writebacks) {
-      std::uintptr_t devPtr = ensureDeviceBuffer(hostPtr, bytes);
-      cuMemcpyDtoH(reinterpret_cast<void *>(hostPtr), devPtr, bytes);
+      auto it = deviceBuffers_.find(hostPtr);
+      if (it != deviceBuffers_.end()) {
+        it->second.hostDirty = true;
+        it->second.bytes = bytes;
+      }
     }
 #endif
   }

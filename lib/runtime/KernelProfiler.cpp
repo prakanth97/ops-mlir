@@ -13,6 +13,7 @@ namespace ops_mlir {
             s.kernel_name = t.kernel_name;
             s.count += 1;
             s.total_ms += t.milliseconds;
+            s.total_bytes += t.bytes;
         }
 
         std::vector<KernelStats> result;
@@ -31,7 +32,8 @@ namespace ops_mlir {
             totalTime += s.total_ms;
             std::cout << s.kernel_name << ": " << s.count << " calls, "
                         << s.total_ms << " ms total, "
-                        << (s.total_ms / s.count) << " ms avg\n";
+                        << (s.total_ms / s.count) << " ms avg, "
+                        << s.bandwidth_gbps() << " GB/s\n";
         }
 
         std::cout << "Total time: " << totalTime << " ms\n";
@@ -43,9 +45,10 @@ namespace ops_mlir {
             std::cerr << "KernelProfiler: failed to open " << path << " for writing\n";
         }
 
-        out << "kernel_name,calls,total_ms,avg_ms\n";
+        out << "kernel_name,calls,total_ms,avg_ms,bandwidth_gbps\n";
         for (const auto &s : aggregate()) {
-            out << s.kernel_name << "," << s.count << "," << s.total_ms << "," << s.avg_ms() << "\n";
+            out << s.kernel_name << "," << s.count << "," << s.total_ms << ","
+                << s.avg_ms() << "," << s.bandwidth_gbps() << "\n";
         }
     }
 } // namespace ops_mlir

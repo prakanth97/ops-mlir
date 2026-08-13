@@ -57,6 +57,12 @@ void set_kernel_source_file(const std::string &filePath) {
 // Invalidate cached device buffers, forcing a host->device re-copy on next use.
 #define ops_halo_transfer(group) ops_mlir::haloTransferIntercepted(group)
 
+#define ops_NaNcheck(dat)                                                    \
+  (ops_mlir::JITEngine::instance().syncHostBuffer(dat), ::ops_NaNcheck(dat))
+#define ops_fetch_dat_hdf5_file(dat, file)                                   \
+  (ops_mlir::JITEngine::instance().syncHostBuffer(dat),                      \
+   ::ops_fetch_dat_hdf5_file(dat, file))
+
 // Tear down JITEngine's cached ExecutionEngines deterministically before
 // the real ops_exit runs -- see JITEngine::shutdown's comment for why.
 #define ops_exit() ops_mlir::exitIntercepted()
