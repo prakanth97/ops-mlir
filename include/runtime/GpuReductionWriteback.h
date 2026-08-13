@@ -84,7 +84,7 @@ struct InsertGpuReductionWritebackPass
               // TODO: combiner kind (maxf/minf/addf) is hardcoded below
               // need to get access to this, potentially by adding it as an attribute to the func.func?
               ib.create<mlir::memref::AtomicRMWOp>(
-                  l, ib.getF64Type(), mlir::arith::AtomicRMWKind::maxf,
+                  l, ib.getF64Type(), mlir::arith::AtomicRMWKind::maximumf,
                   allReduceOp.getResult(), handle, mlir::ValueRange{});
               ib.create<mlir::scf::YieldOp>(l);
             });
