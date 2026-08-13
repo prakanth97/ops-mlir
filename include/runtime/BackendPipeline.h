@@ -30,6 +30,7 @@
 #include "mlir/Conversion/SCFToGPU/SCFToGPUPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/GPUCommon/GPUCommonPass.h"
+#include "runtime/GpuReductionWriteback.h"
 
 namespace ops_mlir {
 
@@ -111,9 +112,11 @@ public:
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createCSEPass());
     pm.addPass(mlir::createReconcileUnrealizedCastsPass());
-
+    
+    pm.addNestedPass<mlir::func::FuncOp>(std::make_unique<StripGpuReductionWritebackPass>());
     pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuMapParallelLoopsPass());
     pm.addNestedPass<mlir::func::FuncOp>(mlir::createConvertParallelLoopToGpuPass());
+    pm.addNestedPass<mlir::func::FuncOp>(std::make_unique<InsertGpuReductionWritebackPass>());
 
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createCSEPass());
