@@ -65,6 +65,15 @@ if(OPS_ENABLE_CUDA)
 endif()
 
 #===============================================================================
+# AMD ROCm GPU Backend Configuration
+#===============================================================================
+option(OPS_ENABLE_ROCM "Build the AMD ROCm/ROCDL backend pipeline" OFF)
+
+if(OPS_ENABLE_ROCM)
+  find_package(hip REQUIRED)
+endif()
+
+#===============================================================================
 # OpenMP Setup
 #===============================================================================
 # omp.h and libomp.so live in the OpenMP runtime build alongside LLVM.

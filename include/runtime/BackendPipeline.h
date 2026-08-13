@@ -174,6 +174,78 @@ private:
   std::string nvgpuSm_;
 };
 
+class RocmPipeline : public BackendPipeline {
+public:
+  explicit RocmPipeline(std::string amdgpuChip) : amdgpuChip_(std::move(amdgpuChip)) {}
+
+  void build(mlir::PassManager &pm) const override {
+    pm.addPass(mlir::createConvertBufferizationToMemRefPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+
+    pm.addNestedPass<mlir::func::FuncOp>(std::make_unique<StripGpuReductionWritebackPass>());
+    pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuMapParallelLoopsPass());
+    pm.addNestedPass<mlir::func::FuncOp>(mlir::createConvertParallelLoopToGpuPass());
+    pm.addNestedPass<mlir::func::FuncOp>(std::make_unique<InsertGpuReductionWritebackPass>());
+
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(mlir::memref::createFoldMemRefAliasOpsPass());
+
+    pm.addPass(mlir::createGpuKernelOutliningPass());
+
+    pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createInlinerPass());
+
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+    pm.addPass(mlir::memref::createFoldMemRefAliasOpsPass());
+
+    pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+    pm.addPass(mlir::createLowerAffinePass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+
+    pm.addNestedPass<mlir::func::FuncOp>(mlir::createGpuAsyncRegionPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+
+    // Vendor-specific passes ---
+    pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToROCDLOpsPass());
+
+    mlir::GpuROCDLAttachTargetOptions rocdlTargetOptions;
+    rocdlTargetOptions.chip = amdgpuChip_;
+    pm.addPass(mlir::createGpuROCDLAttachTarget(rocdlTargetOptions));
+    // End of vendor-specific passes ---
+
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+
+    pm.addPass(mlir::createArithToLLVMConversionPass());
+    pm.addPass(mlir::createConvertMathToLLVMPass());
+    pm.addPass(mlir::createSCFToControlFlowPass());
+    pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+
+    mlir::ConvertFuncToLLVMPassOptions funcToLLVMOpts;
+    funcToLLVMOpts.useBarePtrCallConv = true;
+    pm.addPass(mlir::createConvertFuncToLLVMPass(funcToLLVMOpts));
+
+    pm.addPass(mlir::createGpuToLLVMConversionPass());
+    pm.addPass(mlir::createGpuModuleToBinaryPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+    pm.addPass(mlir::createCSEPass());
+  }
+
+  llvm::Error transformLLVMModule(llvm::Module *m) const override {
+    return llvm::Error::success();  // NOTE: not sure if something specific needs to go here
+  }
+
+private:
+  std::string amdgpuChip_;
+};
+
 } // namespace ops_mlir
 
 

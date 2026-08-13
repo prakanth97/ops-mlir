@@ -309,6 +309,17 @@ void JITEngine::runBackendLowering(mlir::ModuleOp module, Backend backend) {
         "CUDA support (OPS_ENABLE_CUDA=OFF).");
 #endif
     break;
+  case Backend::ROCM:
+#ifdef OPS_ENABLE_ROCM
+    // NOTE: untested due to no hardware access
+    // May need an analogous function to 'detectNVGpuSm' for AMD GPUs
+    pipeline = std::make_unique<RocmPipeline>(());
+#else
+    throw std::runtime_error(
+        "ROCM backend requested but this build was compiled without "
+        "ROCM support (OPS_ENABLE_ROCM=OFF).");
+#endif
+    break;
   }
 
   if (!pipeline) {
@@ -546,6 +557,12 @@ void JITEngine::synchronizeBackend(Backend backend) {
     cuCtxSynchronize();
 #endif
     return;
+  case Backend::ROCM:
+#ifdef OPS_ENABLE_ROCM
+    // NOTE: not sure if this is the correct API
+    hipDeviceSynchronize();
+#endif
+    return;
   }
 }
 
@@ -599,6 +616,9 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
       } else {
         argPtrs.push_back(reinterpret_cast<void *>(arg.data));
       }
+
+      // TODO: execution specifics for AMD GPUs
+      // if (backend_ == Backend::ROCM) { ...
     }
 
     llvm::SmallVector<void *> packedArgs;
@@ -697,6 +717,9 @@ void JITEngine::compile_and_execute() {
     }
   }
 
+  // TODO: Handling for AMD GPUs (if needed)
+  // if (backend_ == Backend::ROCM) { ...
+
   auto engineOrErr = mlir::ExecutionEngine::create(module, engineOptions);
   if (!engineOrErr) {
     llvm::errs() << "Failed to create ExecutionEngine: "
@@ -726,6 +749,9 @@ void JITEngine::compile_and_execute() {
       return symbolMap;
     });
   }
+
+  // TODO: Register symbols for AMD GPUs (if needed?)
+  // if (backend_ == Backend::ROCM) { ...
 
   mlir::ExecutionEngine &engineRef = *engine;
   engineCache_.emplace(std::move(key), std::move(engine));
@@ -783,6 +809,7 @@ std::optional<Backend> parseBackendName(const std::string &name) {
   if (name == "seq" || name == "sequential") return Backend::Sequential;
   if (name == "openmp" || name == "omp") return Backend::OpenMP;
   if (name == "cuda" || name == "nvgpu") return Backend::CUDA; 
+  if (name == "rocm" || name == "amdgpu") return Backend::ROCM; 
   return std::nullopt;
 }
 

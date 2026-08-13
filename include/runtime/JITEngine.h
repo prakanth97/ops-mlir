@@ -19,7 +19,7 @@
 
 namespace ops_mlir {
 
-enum class Backend { Sequential, OpenMP, CUDA };
+enum class Backend { Sequential, OpenMP, CUDA, ROCM };
 
 std::optional<Backend> parseBackendName(const std::string &name);
 constexpr Backend kDefaultBackend = Backend::CUDA;
@@ -153,7 +153,6 @@ public:
     return kernelConstants_;
   }
 
-  // Note - resolveBackend is currently unused. This gives the option of a
   Backend resolveBackend(int argc, char **argv);
 
   const std::vector<LoopDesc> &queue() const { return queue_; }

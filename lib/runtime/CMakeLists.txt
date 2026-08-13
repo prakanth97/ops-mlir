@@ -32,6 +32,7 @@ target_compile_definitions(
 	OPS_XDSL_DIR="${CMAKE_SOURCE_DIR}/xdsl_impl"
 	OPS_CLANG_RESOURCE_DIR="${CLANG_RESOURCE_DIR}"
 	$<$<BOOL:${OPS_ENABLE_CUDA}>:OPS_ENABLE_CUDA>
+	$<$<BOOL:${OPS_ENABLE_ROCM}>:OPS_ENABLE_ROCM>
 )
 
 # BackendPipeline.h (via JITEngine.cpp) defines custom mlir::Pass subclasses
@@ -43,6 +44,10 @@ target_compile_options(OPSRuntime PRIVATE -fno-rtti)
 
 if(OPS_ENABLE_CUDA)
   target_link_libraries(OPSRuntime PRIVATE CUDA::cuda_driver)
+endif()
+
+if(OPS_ENABLE_ROCM)
+  target_link_libraries(OPSRuntime PRIVATE hip::host)
 endif()
 
 target_link_libraries(
