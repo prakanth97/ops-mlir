@@ -9,7 +9,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "runtime/IRBuilder.h"
+#include "runtime/common/IRBuilder.h"
 #include "Dialect/OPS/OPSDialect.h"
 #include "Dialect/OPS/OPSOps.h"
 #include "mlir/IR/Attributes.h"

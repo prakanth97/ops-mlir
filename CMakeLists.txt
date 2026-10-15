@@ -56,6 +56,45 @@ include(AddMLIR)
 include(TableGen)
 
 #===============================================================================
+# Fortran Frontend Configuration
+#===============================================================================
+# The Fortran frontend needs an LLVM build with the flang project enabled:
+# the JIT links flang's frontend to lower kernel modules to FIR at run time,
+# as it links clang for C++ kernel headers. Everything comes from one LLVM
+# build, so FIR and MLIR stay ABI-compatible.
+option(OPS_ENABLE_FORTRAN "Build the Fortran frontend (requires flang)" OFF)
+
+if(OPS_ENABLE_FORTRAN)
+  set(OPS_FLANG_ROOT "${LLVM_BUILD_DIR}" CACHE PATH
+    "LLVM build/install prefix providing bin/flang and the flang libraries")
+
+  if(NOT EXISTS "${OPS_FLANG_ROOT}/bin/flang")
+    message(FATAL_ERROR
+      "OPS_ENABLE_FORTRAN=ON but ${OPS_FLANG_ROOT}/bin/flang is missing.\n"
+      "Rebuild LLVM with flang enabled, e.g.\n"
+      "  cmake -S llvm -B build -DLLVM_ENABLE_PROJECTS=\"clang;mlir;flang\" \\\n"
+      "        -DLLVM_ENABLE_RUNTIMES=\"flang-rt\"\n"
+      "  ninja flang\n"
+      "or point -DOPS_FLANG_ROOT at an LLVM build that has it.")
+  endif()
+
+  # Imports flang's library targets (flangFrontend, FIRDialect, ...) with
+  # their link interfaces, the way Clang's package provides clangTooling.
+  find_package(Flang REQUIRED CONFIG
+    HINTS "${OPS_FLANG_ROOT}/lib/cmake/flang"
+  )
+
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+  message(STATUS "Fortran frontend enabled (flang root: ${OPS_FLANG_ROOT})")
+
+  # Linking a Fortran application needs flang-rt, which the kernel
+  # translator itself does not: it only runs flang's frontend. Keeping the
+  # Fortran applications optional lets the translator and its tests build
+  # against a flang that has no runtime yet.
+  option(OPS_BUILD_FORTRAN_APPS "Build the Fortran example applications" ON)
+endif()
+
+#===============================================================================
 # CUDA GPU Backend Configuration
 #===============================================================================
 option(OPS_ENABLE_CUDA "Build the NVIDIA CUDA/NVVM backend pipeline" OFF)

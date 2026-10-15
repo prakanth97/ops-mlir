@@ -18,7 +18,7 @@
 #ifndef OPS_WRAPPER_H
 #define OPS_WRAPPER_H
 
-#include "runtime/JITEngine.h"
+#include "runtime/common/JITEngine.h"
 #include "ops_lib_core.h"
 
 #include <array>

@@ -27,7 +27,7 @@ from ops_to_stencil import OPSToStencilPass
 
 def convert_ir_text(text: str) -> str:
     """String-in/string-out entry point for embedding (see
-    lib/runtime/JITEngine.cpp::runXdslLowering). Unlike main(), this never
+    lib/runtime/common/JITEngine.cpp::runXdslLowering). Unlike main(), this never
     touches the filesystem or stdout/stderr -- the caller owns the IR
     string and the result string.
     """

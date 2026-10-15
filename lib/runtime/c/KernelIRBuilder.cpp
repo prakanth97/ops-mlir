@@ -15,7 +15,7 @@
 
 // TODO: Support more than just `double` kernel parameters and locals.
 
-#include "runtime/KernelIRBuilder.h"
+#include "runtime/c/KernelIRBuilder.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"

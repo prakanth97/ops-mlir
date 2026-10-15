@@ -2,7 +2,7 @@
 #define OPS_MLIR_OPS_FRONTEND_OPS_BUILDER_H
 
 #include "Dialect/OPS/OPSOps.h"
-#include "runtime/Core.h"
+#include "runtime/common/Core.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include <vector>

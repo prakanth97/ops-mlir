@@ -1,4 +1,4 @@
-#include "runtime/KernelProfiler.h"
+#include "runtime/common/KernelProfiler.h"
 
 #include <fstream>
 #include <iostream>

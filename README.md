@@ -100,3 +100,115 @@ Run the 2D Laplace example:
 ```bash
 ./build/apps/c/laplace_2d/laplace_2d
 ```
+
+## Fortran Frontend
+
+`ops-mlir` can capture and JIT-compile OPS **Fortran** applications as well
+as C++ ones. Just as the C++ frontend runs clang in-process on the kernel
+header, the Fortran frontend runs flang in-process on the kernel module and
+translates the FIR it produces, so a Fortran kernel ends up as the same MLIR
+the C++ frontend produces from a C++ kernel — and reaches the same backends.
+
+### Requirements
+
+The Fortran frontend needs an LLVM build with the `flang` project enabled:
+the runtime links flang's frontend libraries to lower kernel modules to FIR
+at run time. They come from the same LLVM build as MLIR, so FIR and MLIR stay
+ABI-compatible.
+
+```bash
+cd /path/to/llvm-project/build
+cmake -S ../llvm -B . \
+   -DLLVM_ENABLE_PROJECTS="clang;mlir;flang" \
+   -DLLVM_ENABLE_RUNTIMES="flang-rt"
+ninja flang
+ninja runtimes/flang-rt runtimes/flang-rt-mod
+```
+
+Then configure `ops-mlir` with the frontend enabled:
+
+```bash
+cmake -S . -B build -DOPS_ENABLE_FORTRAN=ON \
+   -DCMAKE_Fortran_COMPILER=$LLVM_BUILD_DIR/bin/flang
+cmake --build build -j$(nproc)
+```
+
+`OPS_FLANG_ROOT` defaults to `LLVM_BUILD_DIR`; point it elsewhere if flang
+lives in a different LLVM build. Set `-DOPS_BUILD_FORTRAN_APPS=OFF` to build
+the translator and its tests without linking any Fortran application — the
+translator only needs flang's frontend, not `flang-rt`. (Kernels that `use`
+an intrinsic module such as `iso_c_binding` do need `flang-rt-mod`.)
+
+### Running
+
+```bash
+OPS_BACKEND=seq ./build/apps/fortran/laplace_2d/laplace_2d_ftn
+```
+
+### Writing a Fortran application
+
+There is **no translator step**. An OPS Fortran application changes one line:
+
+```fortran
+-   use OPS_Fortran_Reference
++   use OPS_MLIR_Fortran_Reference
+```
+
+`OPS_MLIR_Fortran_Reference` re-exports the ordinary OPS Fortran API and
+replaces `ops_par_loop` with a capturing version — OPS Fortran's
+`ops_par_loop` already carries the kernel *name*, so loops can be identified
+without rewriting call sites. Iteration ranges stay in OPS Fortran's
+one-based inclusive form; the capture layer converts them. Beyond the `use`
+line an application only adds:
+
+```fortran
+call ops_mlir_set_kernel_source_file(dir // "/kernels.F90")    ! once, after ops_init
+call ops_mlir_add_kernel_dependency(dir // "/constants.F90")   ! modules it uses
+call ops_mlir_compile_and_execute()                            ! flush captured loops
+call ops_mlir_exit()                                           ! instead of ops_exit
+```
+
+This mirrors `set_kernel_source_file()` in a C++ application, and `dir` is
+found the same way, from `__FILE__` (see
+[laplace2d.F90](apps/fortran/laplace_2d/laplace2d.F90)). A kernel module
+usually `use`s other modules; register each as a dependency, in the order a
+compiler would need them, and the JIT compiles them first.
+
+Constants declared with the usual `ops_decl_const` are baked into kernel
+bodies at compile time. A Fortran `parameter` needs nothing at all — flang
+folds its value itself.
+
+### Kernel convention
+
+Kernels follow the same convention as ops-mlir's C++ kernels: a pure
+function of its stencil neighbours, one scalar per stencil point, returning
+the value written at the centre. This is what the stencil lowering calls, so
+it maps one-to-one onto the emitted kernel declaration.
+
+```fortran
+real(kind=8) function apply_stencil(a, b, c, d, e)
+    real(kind=8), intent(in) :: a, b, c, d, e
+    apply_stencil = 0.25_8 * (b + c + d + e)
+end function apply_stencil
+```
+
+An `ops_arg_idx` argument arrives as a rank-one `integer(kind=4)` array of
+the block's dimensionality, indexed with ordinary one-based subscripts.
+
+Supported bodies are straight-line expressions over the kernel's arguments,
+locals, module constants, and intrinsic math functions — the same restriction
+the C++ frontend imposes. Control flow, array-valued dummies other than the
+index argument, and derived types are rejected with a diagnostic naming the
+construct.
+
+### Inspecting a translated kernel
+
+`fortran-kernel-ir-dump` shows exactly what a kernel translates to, without
+building or running the app — the counterpart of `kernel-ir-dump` for C++:
+
+```bash
+./build/tools/fortran-kernel-ir-dump \
+    apps/fortran/laplace_2d/laplace_kernels.F90 \
+    -dep apps/fortran/laplace_2d/laplace_constants.F90 \
+    left_bndcon 2 -idx -int jmax=4094
+```

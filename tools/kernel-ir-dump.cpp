@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "runtime/KernelIRBuilder.h"
+#include "runtime/c/KernelIRBuilder.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"

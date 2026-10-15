@@ -3,7 +3,7 @@
 
 #include "IRBuilder.h"
 #include "Core.h"
-#include "runtime/KernelProfiler.h"
+#include "runtime/common/KernelProfiler.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 
@@ -144,9 +144,38 @@ public:
     kernelSourceFile_ = std::move(path);
   }
 
-  // Register extern global kernel constants (e.g. pi, jmax) for translation into MLIR 
+  // The Fortran counterpart of setKernelSourceFile: the module holding the
+  // application's kernel procedures, translated in-process by flang just as
+  // a C++ kernel header is by clang.
+  void setFortranKernelSourceFile(std::string path) {
+    kernelSourceFile_ = std::move(path);
+    fortranKernels_ = true;
+  }
+
+  // A module the Fortran kernel module `use`s (e.g. the application's
+  // constants). Flang needs its `.mod` file to check the kernels, so it is
+  // compiled first; add dependencies before the modules that use them.
+  void addFortranKernelDependency(std::string path) {
+    fortranKernelDependencies_.push_back(std::move(path));
+  }
+
+  // Register extern global kernel constants (e.g. pi, jmax) for translation into MLIR
   void registerKernelConstant(const std::string &name, const void *ptr) {
     kernelConstants_[name] = ptr;
+  }
+
+  // Same, but takes a snapshot of the value instead of retaining the
+  // caller's address. Fortran has no stable address to hand over: a
+  // constant reaches ops_decl_const as a dummy argument, and passing a
+  // `parameter` (or any non-TARGET actual) copies it, so the address would
+  // dangle by the time a kernel is compiled. Constants are set before any
+  // par_loop runs, so snapshotting at registration matches OPS semantics.
+  void registerKernelConstantValue(const std::string &name, const void *data,
+                                   std::size_t bytes) {
+    const char *begin = static_cast<const char *>(data);
+    std::vector<char> &storage = ownedKernelConstants_[name];
+    storage.assign(begin, begin + bytes);
+    kernelConstants_[name] = storage.data();
   }
 
   const std::map<std::string, const void *> &kernelConstants() const {
@@ -237,7 +266,13 @@ private:
   std::vector<LoopDesc> queue_;
   FlushCallback flushCallback_;
   std::string kernelSourceFile_;
+  bool fortranKernels_ = false;
+  std::vector<std::string> fortranKernelDependencies_;
   std::map<std::string, const void *> kernelConstants_;
+  // Backing storage for constants registered by value (see
+  // registerKernelConstantValue). Entries are never erased, so the pointers
+  // handed to kernelConstants_ stay valid for the engine's lifetime.
+  std::map<std::string, std::vector<char>> ownedKernelConstants_;
 
   std::unordered_map<ModuleKey, std::unique_ptr<mlir::ExecutionEngine>>
       engineCache_;

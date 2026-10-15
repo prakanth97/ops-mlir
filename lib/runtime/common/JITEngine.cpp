@@ -9,10 +9,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "runtime/JITEngine.h"
-#include "runtime/BackendPipeline.h"
-#include "runtime/KernelIRBuilder.h"
-#include "runtime/KernelProfiler.h"
+#include "runtime/common/JITEngine.h"
+#include "runtime/common/BackendPipeline.h"
+#include "runtime/fortran/FortranKernelIRBuilder.h"
+#include "runtime/c/KernelIRBuilder.h"
+#include "runtime/common/KernelProfiler.h"
 #include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Parser/Parser.h"
@@ -390,9 +391,14 @@ void JITEngine::compile() {
 
 bool JITEngine::materializeKernelBody(const std::string &kernelName,
                                       int indexRank) {
+  // Exactly one frontend is in play per program: a C++ application sets a
+  // kernel header (parsed with clang), a Fortran one a kernel module (lowered
+  // with flang). Both must produce the same `func.func` shape, since it
+  // replaces the private declaration xDSL's stencil lowering leaves behind.
   if (kernelSourceFile_.empty()) {
     llvm::errs() << "materializeKernelBody: no kernel source file set "
-                    "(call setKernelSourceFile), cannot translate '"
+                    "(call setKernelSourceFile, or setFortranKernelSourceFile "
+                    "for Fortran), cannot translate '"
                  << kernelName << "'\n";
     return false;
   }
@@ -408,9 +414,18 @@ bool JITEngine::materializeKernelBody(const std::string &kernelName,
     return true;
   }
 
-  KernelIRBuilder kernelBuilder(ctx);
-  mlir::func::FuncOp translatedFn = kernelBuilder.generate(
-      kernelSourceFile_, kernelName, indexRank, kernelConstants_, llvm::errs());
+  mlir::func::FuncOp translatedFn;
+  if (fortranKernels_) {
+    FortranKernelIRBuilder kernelBuilder(ctx);
+    translatedFn = kernelBuilder.generate(
+        {kernelSourceFile_, fortranKernelDependencies_}, kernelName, indexRank,
+        declOp.getFunctionType(), kernelConstants_, llvm::errs());
+  } else {
+    KernelIRBuilder kernelBuilder(ctx);
+    translatedFn = kernelBuilder.generate(kernelSourceFile_, kernelName,
+                                          indexRank, kernelConstants_,
+                                          llvm::errs());
+  }
   if (!translatedFn) {
     llvm::errs() << "materializeKernelBody: could not translate '"
                  << kernelName << "' from " << kernelSourceFile_ << "\n";
