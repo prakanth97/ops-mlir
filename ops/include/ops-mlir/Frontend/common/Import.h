@@ -1,19 +1,7 @@
-//===- KernelImport.h - OPS kernel (C++) -> ops.kernel + manifest ------*- C++ -*-===//
-//
-// Provider A of the plan: a build-time frontend that reads one OPS user kernel with clang (in the translation unit
-// of the application, with its include paths and definitions) and emits
-//
-//   * an MLIR module holding `ops.kernel @<name>`, and
-//   * a manifest (JSON, plan section 4.2): what the kernel's parameters are, which constants it reads, which
-//     offsets it accesses, whether it reduces, ...
-//
-// Anything outside the supported subset makes the import fail with a reason (status "failed" in the manifest): the
-// loops that call the kernel then run through the stock OPS code.
-//
-//===----------------------------------------------------------------------===//
+//===- Import.h - options and result shared by the kernel importers ----*- C++ -*-===//
 
-#ifndef OPS_MLIR_FRONTEND_KERNELIMPORT_H
-#define OPS_MLIR_FRONTEND_KERNELIMPORT_H
+#ifndef OPS_MLIR_FRONTEND_COMMON_IMPORT_H
+#define OPS_MLIR_FRONTEND_COMMON_IMPORT_H
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OwningOpRef.h"
@@ -39,6 +27,8 @@ struct ImportOptions {
   std::vector<std::string> clangArgs;
   /// Clang's resource directory (builtin headers). Empty: the one this build was configured with.
   std::string resourceDir;
+  /// Fortran: module sources the kernel uses, in dependency order.
+  std::vector<std::string> modules;
 };
 
 struct ImportResult {
@@ -47,18 +37,9 @@ struct ImportResult {
   mlir::OwningOpRef<mlir::ModuleOp> module;
   std::string manifest;               ///< JSON text, with the digest of the module and the manifest
   std::vector<std::string> warnings;  ///< things that were dropped or approximated (printf)
-  std::vector<std::string> dependencies; ///< files the translation unit read (for build dependency files)
+  std::vector<std::string> dependencies; ///< files the import read (for build dependency files)
 };
-
-/// "A/1.0": the provider and its version, recorded in manifests and part of their digests.
-const char *importerId();
-
-/// Imports the kernel. `ctx` needs the ops, arith, math and scf dialects.
-ImportResult importKernel(mlir::MLIRContext &ctx, const ImportOptions &options);
-
-/// A manifest for a kernel that could not be imported.
-std::string failedManifest(const ImportOptions &options, const std::string &reason);
 
 } // namespace ops_mlir::frontend
 
-#endif // OPS_MLIR_FRONTEND_KERNELIMPORT_H
+#endif // OPS_MLIR_FRONTEND_COMMON_IMPORT_H

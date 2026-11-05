@@ -1,5 +1,6 @@
 # ops_add_jit_artifacts(<target> KERNELS_JSON <jit_kernels.json>
-#                       [IMPORTER <ops-kernel-import>] [OUTPUT_DIR <dir>] [CLANG_ARGS <flags>...])
+#                       [IMPORTER <ops-kernel-import>] [OUTPUT_DIR <dir>] [CLANG_ARGS <flags>...]
+#                       [FORTRAN_MODULES <module sources>...])
 #
 # Imports every kernel listed in the translator's jit_kernels.json (OPS translator --jit) with ops-kernel-import and
 # adds the generated ops_jit_artifacts.cpp to <target>. That file defines
@@ -10,13 +11,14 @@
 # its manifest: the loops that call it run the ahead-of-time code.
 #
 # The importer sees the compiler flags of <target> (INCLUDE_DIRECTORIES and COMPILE_DEFINITIONS, so they have to be
-# set before the call or be generator expressions), plus CLANG_ARGS. An artifact is imported again when a file its
-# translation unit read changes (depfile written by the importer; Makefile and Ninja generators).
+# set before the call or be generator expressions), plus CLANG_ARGS. Fortran kernels ("language": "fortran") are
+# imported with provider F, with FORTRAN_MODULES. An artifact is imported again when a file its translation unit read
+# changes (depfile written by the importer; Makefile and Ninja generators).
 
 set(_OPS_JIT_ARTIFACTS_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 function(ops_add_jit_artifacts target)
-  cmake_parse_arguments(ARG "" "KERNELS_JSON;IMPORTER;OUTPUT_DIR" "CLANG_ARGS" ${ARGN})
+  cmake_parse_arguments(ARG "" "KERNELS_JSON;IMPORTER;OUTPUT_DIR" "CLANG_ARGS;FORTRAN_MODULES" ${ARGN})
   if(NOT ARG_KERNELS_JSON)
     message(FATAL_ERROR "ops_add_jit_artifacts: KERNELS_JSON is required")
   endif()
@@ -61,6 +63,16 @@ function(ops_add_jit_artifacts target)
           list(APPEND kinds "${kind}")
         endforeach()
       endif()
+      string(JSON language ERROR_VARIABLE lerr GET "${json}" kernels ${i} language)
+      set(provider_opt "")
+      set(module_deps "")
+      if(NOT lerr AND language STREQUAL "fortran")
+        set(provider_opt --provider F)
+        foreach(m ${ARG_FORTRAN_MODULES})
+          list(APPEND provider_opt --module "${m}")
+          list(APPEND module_deps "${m}")
+        endforeach()
+      endif()
       string(JOIN "," kinds_arg ${kinds})
       set(kinds_opt "")
       if(kinds_arg)
@@ -74,9 +86,9 @@ function(ops_add_jit_artifacts target)
         OUTPUT "${man}"
         BYPRODUCTS "${bin}"
         COMMAND ${CMAKE_COMMAND} -E remove -f "${bin}"
-        COMMAND ${ARG_IMPORTER} --kernel ${k} --source "${source}" --ndim ${ndim} ${kinds_opt}
+        COMMAND ${ARG_IMPORTER} ${provider_opt} --kernel ${k} --source "${source}" --ndim ${ndim} ${kinds_opt}
                 -o "${bin}" --manifest "${man}" --depfile "${dep}" --args-file "${args_file}"
-        DEPENDS "${args_file}" "${source}" ${ARG_IMPORTER}
+        DEPENDS "${args_file}" "${source}" ${module_deps} ${ARG_IMPORTER}
         DEPFILE "${dep}"
         COMMENT "Importing OPS kernel ${k}"
         VERBATIM)

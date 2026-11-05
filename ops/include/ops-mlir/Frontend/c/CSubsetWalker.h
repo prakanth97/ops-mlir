@@ -13,8 +13,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef OPS_MLIR_FRONTEND_CSUBSETWALKER_H
-#define OPS_MLIR_FRONTEND_CSUBSETWALKER_H
+#ifndef OPS_MLIR_FRONTEND_C_CSUBSETWALKER_H
+#define OPS_MLIR_FRONTEND_C_CSUBSETWALKER_H
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -150,4 +150,4 @@ private:
 
 } // namespace ops_mlir::frontend
 
-#endif // OPS_MLIR_FRONTEND_CSUBSETWALKER_H
+#endif // OPS_MLIR_FRONTEND_C_CSUBSETWALKER_H

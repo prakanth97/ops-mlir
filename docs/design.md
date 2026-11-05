@@ -14,7 +14,7 @@ halo exchanges, host/device coherence, dirty bits and timing stays OPS's busines
 
 ```
 build time   app.cpp + kernels.h --ops-translator --jit--> AOT loops (unchanged) + jit_kernels.json
-             jit_kernels.json --ops-kernel-import (clang AST walker)--> per kernel: ops.kernel bytecode + manifest
+             jit_kernels.json --ops-kernel-import (clang AST / flang FIR walker)--> per kernel: ops.kernel bytecode + manifest
              ops_add_jit_artifacts: embeds them as `ops_jit_artifact_<kernel>`; the loops pass the pointer to OPS
 run time     flush(descs) -> claim -> run of claimed loops -> lift to ops.chain -> frontend passes -> planner (fusion)
                           -> per group: lower (CPU: OpenMP, GPU: CUDA) -> LLVM -> object -> JIT -> call with bound arguments
@@ -26,7 +26,7 @@ run time     flush(descs) -> claim -> run of claimed loops -> lift to ops.chain 
 |---|---|---|---|
 | core (`opdsl`) | `core/` | LLVM/MLIR only; **no OPS** (a test enforces it) | `Hash`, `PipelineRegistry` (named pipelines with option strings), `JITSession` (ORC LLJIT: compile a module to an object, load an object, packed call), `PersistentCache` (atomic, checksummed, LRU), `GpuShim` (the `mgpu*` runtime symbols over the CUDA driver) |
 | dialect and passes | `ops/include`, `ops/lib/{Dialect,Analysis,Transforms,Conversion,Pipelines}` | MLIR; **no OPS library, no runtime** | the `ops` dialect, footprint and dependence analyses, the fusion planner, passes, the named pipelines |
-| frontend | `ops/lib/Frontend`, `tools/ops-kernel-import` | the dialect, clang | kernel C++ -> `ops.kernel` + manifest |
+| frontend | `ops/lib/Frontend/{common,c,fortran}`, `tools/ops-kernel-import` | the dialect, clang, flang (optional) | kernel C++ or Fortran -> `ops.kernel` + manifest |
 | runtime | `ops/lib/Runtime` | everything above, the OPS headers; **no OPS library at link time** | claim, lifter, binding, executor, `libopsjit.so` |
 | tools, apps, tests | `tools/`, `apps/`, `test/` | | `ops-opt`, `ops-kernel-import`, `ops-jit-replay`; the example applications; lit, unit and end-to-end tests |
 
@@ -79,7 +79,12 @@ serialisation; fatbin through `ptxas`). All passes and pipelines with their opti
 `ChainDependence` (RAW/WAR/WAW edges and whether each is point-local), `FusionPlanner` (consecutive and DAG planners; the pass uses the
 DAG planner). A randomised oracle test checks the planner's plans for semantic equivalence and was itself mutation-checked.
 
-## 5. Frontend (provider A)
+## 5. Frontends (providers A and F)
+
+Both providers fill the same `KernelSummary` and write the manifest with `common/Manifest.cpp`; they differ only in the importer id
+(`A/1.0`, `F/1.0`), which is part of the digest.
+
+**Provider A** (`Frontend/c`, C++).
 
 `ops-kernel-import` parses the *translation unit of the application* with its real flags (so globals, structs and macros are the
 real ones), finds the kernel function and walks its AST (`CSubsetWalker` is a generic C-subset-to-MLIR walker; `OPSKernelWalker` adds
@@ -88,6 +93,18 @@ threaded through `scf.if`/`scf.for`; loops over components are unrolled. Helper 
 outside the subset is a failure with a reason in the manifest (`status: failed`) and the loop runs AOT. The manifest (plan §4.2) records
 parameter kinds and types, constants (with offsets in structs, `role: bound`), the constant offsets read and written per accessor,
 reductions' style. Over the OPS example applications 588 of 626 kernels import (`scripts/import_coverage.py` regenerates the report). Provider B (ClangIR) was evaluated on a corpus of 62 translation units, of which 38 emit CIR, and is not adopted; provider C (LLVM IR) is a possible fallback.
+
+**Provider F** (`Frontend/fortran`, Fortran; built with `-DOPSJIT_ENABLE_FORTRAN=ON` against an LLVM build with flang). The kernel
+file (`<name>.inc`, the translator's convention) is `#include`d into a generated wrapper module that `use`s the application's modules
+(`--module`, e.g. `OPS_CONSTANTS`) and maps `OPS_ACCn(...)`/`OPS_ACC_MDn(d, ...)` to calls of an interface function, so that every
+access keeps its argument and offsets. flang's frontend lowers it to FIR in-process; the FIR of the subroutine is walked once: locals
+(`fir.alloca`, and elements of local arrays with constant subscripts) are slots threaded through `scf.if`/`scf.for` (`fir.if`,
+`fir.do_loop`; constant-trip loops whose body subscripts are unrolled), dummies become accessors, globals (`gbl_read`, one-based
+elements), reductions (`r = r + x`, `r - x`, `MIN`/`MAX` as flang's compare-and-select) and the index (`idx(d)` is one-based:
+`ops.index d-1` plus one), module variables become `ops.const_ref` by their Fortran name and module `parameter`s are folded (from
+the FIR of the module sources). Helper procedures, unstructured control flow (`GOTO`, `EXIT`, `CYCLE`) and multi-element reductions
+are not supported. Of the kernels of the Fortran example applications of OPS, only the two-component reductions of multiDim and
+multiDim3D do not import.
 
 ## 6. Runtime
 
@@ -128,7 +145,8 @@ the buffer back (a synchronising copy) and combines the partial values into the 
   `OPS_JIT_VERIFY=1` on CloverLeaf/TeaLeaf/TGV.
 * **A new target**: a lowering pass (as `convert-ops-to-scf target=gpu` is one variant) and a pipeline registered in `Pipelines.cpp`; a
   shim in `core/GPU` if it needs runtime symbols; the executor chooses the pipeline in `Executor::buildPlan`.
-* **A new frontend**: produce the same `ops.kernel` + manifest (`importerId()` is part of the digest); `test/lit/Frontend` is the
+* **A new frontend**: produce the same `ops.kernel` + manifest through `common/Manifest.h` (the importer id is part of the digest), as
+  `Frontend/c` and `Frontend/fortran` do; `test/lit/Frontend` is the
   conformance suite.
 * **A new loop feature** (e.g. multigrid): the claim, the lifter (what the chain looks like), the dialect verifier, the binding.
 * **Reusing the core for another DSL** (`op2-mlir`): `core/` and `OPSMLIRRuntimeCore` have no OPS dependency.

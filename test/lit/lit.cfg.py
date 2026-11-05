@@ -43,3 +43,6 @@ config.substitutions.append(("%mlir_omp", _find_libomp()))
 if os.path.exists(os.path.join(config.ops_include_dir, "ops_lib_core.h")):
     config.available_features.add("ops-headers")
 config.substitutions.append(("%ops_include", config.ops_include_dir))
+
+if config.fortran_importer.upper() in ("ON", "TRUE", "1", "YES"):
+    config.available_features.add("fortran-importer")

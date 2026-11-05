@@ -6,6 +6,8 @@
 
 #include "llvm/Support/JSON.h"
 
+#include <cctype>
+
 namespace ops_mlir::runtime {
 
 std::string elemName(const std::string &opsType) {
@@ -13,6 +15,15 @@ std::string elemName(const std::string &opsType) {
   if (opsType == "float" || opsType == "real(4)") return "f32";
   if (opsType == "int" || opsType == "integer(4)") return "i32";
   if (opsType == "half" || opsType == "_Float16" || opsType == "real(2)") return "f16";
+  // Fortran applications: any case and spacing, with or without `kind=` (OPS Fortran writes "real(kind=8)").
+  std::string t;
+  for (char c : opsType)
+    if (!std::isspace(static_cast<unsigned char>(c))) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (size_t k = t.find("kind="); k != std::string::npos) t.erase(k, 5);
+  if (t == "real(8)" || t == "real*8" || t == "doubleprecision") return "f64";
+  if (t == "real(4)" || t == "real*4" || t == "real") return "f32";
+  if (t == "integer(4)" || t == "integer*4" || t == "integer") return "i32";
+  if (t == "real(2)") return "f16";
   return "";
 }
 

@@ -45,6 +45,28 @@ scripts/build_apps.sh                  # the example applications built with the
 
 An application translated without `--jit` contains no reference to the JIT at all.
 
+### Fortran applications
+
+OPS Fortran applications use the translator's f2c targets, whose generated C++ enqueues loops like the C++ targets do. Their kernels
+are imported by provider F, which needs an LLVM build with flang:
+
+```bash
+cmake -S . -B build -DOPSJIT_ENABLE_FORTRAN=ON         # ops-kernel-import with flang (MLIR_DIR of an LLVM build with flang)
+scripts/build_ops_fortran.sh                           # libops_f2c_seq.a and OPS's Fortran .mod files, built with flang
+OPSJIT_APPS_FORTRAN=ON scripts/build_apps.sh           # laplace2d_ftn_jit, poisson_ftn_jit
+```
+
+For your own application: translate with `--jit -t f2c_mpi_openmp` (the table then lists each kernel's `.inc` file with
+`"language": "fortran"`), and give `ops_add_jit_artifacts` the modules the kernels use (`FORTRAN_MODULES constants.F90`), or use
+`cmake/OpsFortranApps.cmake: ops_jit_add_fortran_app(<name> SOURCE_DIR <dir> MAIN app.F90 MODULES constants.F90)`. Compile the
+generated C++ with `-DOPS_LAZY -DOPS_FTN`, the Fortran with `-DOPS_F2C_INTEROP`, and link `libops_f2c_seq` and `libopsjit`.
+Constants declared with `ops_decl_const` are registered under their lower-case names, which is what the kernels refer to.
+To import one kernel by hand:
+
+```bash
+ops-kernel-import --kernel apply_stencil_kernel --source apply_stencil_kernel.inc --module constants.F90 --ndim 2 -o - --manifest k.json
+```
+
 ## 3. Running
 
 Nothing changes on the command line. Behaviour is controlled by environment variables (`ops_jit_set_option(name, value)` does the
