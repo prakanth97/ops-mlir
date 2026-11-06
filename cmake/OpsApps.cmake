@@ -38,6 +38,15 @@ function(_ops_jit_add_test exe_target script mode tmp)
   if(NOT rc EQUAL 0 OR "${command}" STREQUAL "")
     return()
   endif()
+  _ops_jit_add_test_command(${exe_target} "${command}" "${mode}" "${tmp}")
+endfunction()
+
+# The tests of one executable, for a command line that runs it: the same run in three configurations of the JIT,
+# and a cache test. The run passes if its output has "PASSED" (OPS's apps/c/runtests.cmake).
+function(_ops_jit_add_test_command exe_target command mode tmp)
+  if(NOT OPS_TEST)
+    return()
+  endif()
   # The same run in three configurations of the JIT: default, loops not fused, every group checked against OPS.
   set(labels "jit-app")
   if(mode MATCHES "cuda")

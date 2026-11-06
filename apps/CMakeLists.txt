@@ -36,7 +36,7 @@ endif()
 # After the packages above: OPSConfig only imports the backends whose dependencies were found.
 find_package(OPS REQUIRED HINTS "${OPS_INSTALL}/lib/cmake")
 
-set(OPS_TRANSLATOR "${OPS_INSTALL}/translator/ops_translator/ops-translator" CACHE FILEPATH "ops-translator")
+set(OPS_TRANSLATOR "${OPS_INSTALL}/translator/ops_translator/ops-translator")
 set(OPS_PYTHON "${OPS_INSTALL}/translator/ops_translator/ops_venv/bin/python3")
 set(OPSJIT_IMPORTER "${OPSJIT_BUILD}/bin/ops-kernel-import")
 foreach(f OPS_TRANSLATOR OPS_PYTHON OPSJIT_IMPORTER)

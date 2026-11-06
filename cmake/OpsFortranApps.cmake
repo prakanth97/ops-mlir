@@ -64,4 +64,6 @@ function(ops_jit_add_fortran_app name)
   target_compile_definitions(${exe} PRIVATE $<$<COMPILE_LANGUAGE:Fortran>:OPS_F2C_INTEROP>
                                             $<$<COMPILE_LANGUAGE:CXX>:OPS_LAZY OPS_FTN>)
   target_link_libraries(${exe} PRIVATE "${OPS_FORTRAN_F2C_LIB}" opsjit OpenMP::OpenMP_CXX stdc++)
+  # Run with no arguments in the application's own directory (OPS's Fortran apps print PASSED when they are correct).
+  _ops_jit_add_test_command(${exe} "${CMAKE_CURRENT_BINARY_DIR}/${exe}" seq "${tmp}")
 endfunction()
