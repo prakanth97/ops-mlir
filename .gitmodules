@@ -1,0 +1,4 @@
+[submodule "third_party/OPS"]
+	path = third_party/OPS
+	url = https://github.com/OP-DSL/OPS.git
+	branch = feature/jit-executor

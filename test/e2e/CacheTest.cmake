@@ -1,0 +1,36 @@
+# ctest driver: an application run twice with the same fresh disk cache. The second run must not compile anything
+# (every group comes from the cache) and both must pass.
+#
+#   cmake -DCMD="<command line>" -DDIR=<cache directory> -DWORKDIR=<run directory> -P CacheTest.cmake
+#
+# Needs OPS_JIT_STATS output (ops_jit counters: ... compiled=N ...) on stderr.
+file(REMOVE_RECURSE "${DIR}")
+file(MAKE_DIRECTORY "${DIR}")
+set(ENV{OPS_JIT_CACHE_DIR} "${DIR}")
+set(ENV{OPS_JIT_STATS} "1")
+separate_arguments(cmds NATIVE_COMMAND "${CMD}")
+foreach(run 1 2)
+  execute_process(COMMAND ${cmds} WORKING_DIRECTORY "${WORKDIR}" OUTPUT_VARIABLE out ERROR_VARIABLE err RESULT_VARIABLE rc)
+  if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "run ${run} failed (${rc}):\n${out}\n${err}")
+  endif()
+  if(NOT out MATCHES "PASSED")
+    message(FATAL_ERROR "run ${run} did not print PASSED:\n${out}")
+  endif()
+  if(NOT err MATCHES "ops_jit counters:[^\n]* compiled=([0-9]+)")
+    message(FATAL_ERROR "run ${run} printed no JIT counters (is the executable linked with libopsjit?):\n${err}")
+  endif()
+  set(compiled_${run} ${CMAKE_MATCH_1})
+  string(REGEX MATCH "claimed=([0-9]+)" ignored "${err}")
+  set(claimed_${run} ${CMAKE_MATCH_1})
+endforeach()
+message(STATUS "run 1 compiled ${compiled_1} groups, run 2 compiled ${compiled_2} (claimed loops: ${claimed_1})")
+if(claimed_1 EQUAL 0)
+  message(FATAL_ERROR "the JIT claimed no loops")
+endif()
+if(NOT compiled_1 GREATER 0)
+  message(FATAL_ERROR "the first run compiled nothing: the cache directory was not fresh?")
+endif()
+if(NOT compiled_2 EQUAL 0)
+  message(FATAL_ERROR "the second run compiled ${compiled_2} groups: the disk cache did not serve them")
+endif()

@@ -1,110 +1,75 @@
 # ops-mlir
-MLIR Compiler Implementation for OPS DSL
 
-## Dependencies
+An MLIR JIT for the [OPS](https://github.com/OP-DSL/OPS) structured-mesh library. It is an optimising tier that plugs into
+OPS's own lazy execution: OPS queues the loops of a program as kernel descriptors and, at a flush, hands them to the JIT, which
+fuses them, specialises them and compiles them (CPUs with OpenMP, NVIDIA GPUs with CUDA). Loops the JIT does not take run with
+OPS's generated code.
 
-- CMake >= 3.20
-- A C++17 compiler
-- [LLVM/MLIR](https://github.com/llvm/llvm-project) built from source, with the `mlir` project enabled
-- [OPS](https://github.com/OP-DSL/OPS) (the OPS DSL C library)
-- OpenMP
+## How it works
 
-## Python Dependencies
+1. **Build time.** The OPS translator (`--jit`) runs `ops-kernel-import`, a clang AST walker, over the user kernels and embeds one
+   MLIR artifact per kernel (bytecode and a manifest) next to the ordinary generated code.
+2. **Run time.** `ops_par_loop` queues a descriptor instead of running the loop. When the program needs the data, OPS flushes the
+   queue through the registered chain executor (`ops_register_chain_executor`).
+3. **The executor** (`libopsjit`) claims the loops it supports and lifts them into an `ops.chain` of SSA values. It plans fusion
+   groups (`ops-jit-plan`), lowers each group (`ops-jit-cpu`: scf and OpenMP, optionally through the affine dialect;
+   `ops-jit-cuda`: NVVM), compiles it with ORC LLJIT and caches the code in memory and on disk, keyed by the bytecode of the group
+   and the options.
+4. **OPS keeps** the memory, MPI halos, dirty bits, reductions and timing; the JIT only runs loops. In verify mode
+   (`OPS_JIT_VERIFY=1`) every group is compared with OPS's own code.
 
-- xDSL (for generating OPS DSL code from Python)
+More: [docs/design.md](docs/design.md) (architecture), [docs/user-guide.md](docs/user-guide.md) (building an application, the
+environment variables), [docs/passes.md](docs/passes.md) (passes and pipelines, generated),
+[docs/performance.md](docs/performance.md) (measurements).
 
-## Installation
+## Layout
 
-### 1. Build LLVM/MLIR
+| Directory | Contents |
+|---|---|
+| `core/` | `opdsl`: DSL-independent infrastructure (hashing, artifacts, JIT session, caches, GPU shim). Must not depend on OPS. |
+| `ops/` | the `ops` dialect, analyses, transforms, conversions, pipelines, kernel importer, runtime |
+| `tools/` | `ops-opt`, `ops-kernel-import`, `ops-jit-replay` |
+| `test/` | lit tests (`test/lit`), end-to-end suites |
+| `apps/`, `cmake/` | the OPS applications built with the JIT, and the CMake helpers for them |
+| `scripts/` | environment (`env.sh`), OPS build, CI entry point, performance scripts |
+| `cluster/v2/` | `sync.sh`: publishes the local branches to the `cl` cluster |
+| `third_party/OPS/` | git submodule: the OPS sources (branch `feature/jit-executor`), used for the OPS build, the importer tests and the apps |
 
-Clone and build `llvm-project` with the MLIR project enabled, e.g.:
-
-```bash
-git clone https://github.com/llvm/llvm-project.git
-cd llvm-project
-mkdir build && cd build
-cmake -G Ninja ../llvm \
-   -DLLVM_ENABLE_PROJECTS=mlir \
-   -DLLVM_BUILD_EXAMPLES=ON \
-   -DLLVM_TARGETS_TO_BUILD="Native;NVPTX;AMDGPU" \
-   -DCMAKE_BUILD_TYPE=Release \
-   -DLLVM_ENABLE_ASSERTIONS=ON \
-ninja
-```
-
-### 2. Clone OPS
-
-Clone the [OPS](https://github.com/OP-DSL/OPS) repository — `ops-mlir`
-builds the OPS sequential backend (`ops_seq`) from its source tree and
-links against it.
-
-### 3. Set environment variables
-
-`ops-mlir`'s CMake configuration reads the LLVM/MLIR build/source
-locations and the OPS checkout location from environment variables — it
-does not hardcode any paths. Set the following before configuring the
-project:
+## Getting the sources
 
 ```bash
-export MLIR_BUILD_DIR=/path/to/llvm-project/build
-export LLVM_BUILD_DIR=/path/to/llvm-project/build
-export LLVM_SOURCE_DIR=/path/to/llvm-project/llvm
-export MLIR_SOURCE_DIR=/path/to/llvm-project/mlir
-export OPS_ROOT=/path/to/OPS/ops/c
+git clone --recurse-submodules https://github.com/OP-DSL/ops-mlir.git     # or: git submodule update --init third_party/OPS
 ```
 
-A template is provided in [`env_setup_template`](env_setup_template) — copy/edit it for your
-own paths and `source` it before building:
+`scripts/env.sh` takes `OPS_SRC` from the submodule when it is checked out; set `OPS_SRC` to use your own OPS clone
+(for work on the OPS side). The submodule is pinned to a commit: to move it, `git -C third_party/OPS checkout <commit>`
+and commit the new pin. Third-party code is never copied into this repository.
+
+## Build and test
+
+The toolchain is pinned (LLVM/MLIR/clang 23.1.0, `cmake/LLVMVersion.cmake`); `scripts/env.sh` selects it on the
+cluster and in WSL.
 
 ```bash
-source env_setup
+source scripts/env.sh
+scripts/ci.sh          # configure, build, check-ops-mlir
 ```
 
-### 4. Build ops-mlir
+Targets: `check-ops-mlir` (everything), `check-ops-mlir-lit`, `check-ops-mlir-unit`.
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
-cmake --build build -j$(nproc)
-```
+The lit tests need `lit`, which the pinned LLVM install does not ship: `pip install -r requirements-test.txt`, or
+point `OPSJIT_LIT` (environment or `-DOPSJIT_LIT=`) at the `llvm-lit` of an LLVM build. Without it
+`check-ops-mlir-lit` fails with a message saying so; the rest builds and runs.
 
-The project must be compiled with the clang++ bundled in the LLVM build
-(`$MLIR_BUILD_DIR/bin/clang++`, added to `PATH` by `env_setup`). GCC 12 is
-incompatible with the generated MLIR headers in LLVM 23. The OpenMP
-headers and library are located automatically from `MLIR_BUILD_DIR` — no
-extra env vars or `-D` flags are needed.
+## Citation
 
-CMake configuration will fail with a clear error if any of the five
-environment variables above are not set.
-
-## 5. Use xDSL Fork
-Needed for OPS reductions.
-
-```bash
-# Remove standard xDSL (if needed)
-pip uninstall xdsl
-
-git clone https://github.com/Archii0/xdsl.git
-# you may need to change to the branch "stencil-reduce"
-# git checkout stencil-reduce
-
-pip install -e path/to/xdsl-fork
-
-```
-
-TLDR - only partial reduction support is upstreamed into xDSL, waiting on stencil dialect stakeholders to validate my full changes still...
-
-## Usage
-
-Run the 2D Laplace example:
-
-```bash
-./build/apps/c/laplace_2d/laplace_2d
-```
-
-## Citing
+If you use this work, please cite:
 
 ```
 A. Dascombe, P. Thilakaraj, and G. R. Mudalige, “Code Generation with MLIR for the OPS Structured-Mesh DSL,”
 in Proceedings of the 2026 IEEE/ACM 12th Workshop on the LLVM Compiler Infrastructure in HPC (LLVM-HPC 2026),
 Chicago, IL, USA, Nov. 16, 2026, to be published.
 ```
+
+The paper describes the first version of ops-mlir, which is in the history of `main`; this version keeps its idea and replaces
+the embedded Python/xDSL lowering with the executor described above.

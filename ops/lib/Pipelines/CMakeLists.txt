@@ -1,0 +1,44 @@
+add_mlir_library(OPSMLIRPipelines
+  Pipelines.cpp
+  GroupModules.cpp
+
+  LINK_LIBS PUBLIC
+  OPDSLPipeline
+  OPSMLIRTransforms
+  OPSMLIRConversion
+  MLIRPass
+  MLIRBytecodeWriter
+  MLIRControlFlowDialect
+  MLIRLLVMDialect
+  MLIRMathDialect
+  MLIROpenMPDialect
+  MLIRTransforms
+  MLIRSCFToOpenMP
+  MLIRSCFToControlFlow
+  MLIRControlFlowToLLVM
+  MLIRArithToLLVM
+  MLIRMathToLLVM
+  MLIRFuncToLLVM
+  MLIRMemRefTransforms
+  MLIRMemRefToLLVM
+  MLIROpenMPToLLVM
+  MLIRReconcileUnrealizedCasts
+  MLIRRegisterAllExtensions
+  MLIRGPUDialect
+  MLIRGPUPipelines
+  MLIRGPUTransforms
+  MLIRAffineToStandard
+  MLIRAffineTransforms
+  MLIRAffineDialect
+  MLIRIndexToLLVM
+  MLIRNVGPUToNVVM
+  MLIRNVVMToLLVM
+  MLIRVectorToSCF
+  MLIRGPUToNVVMTransforms
+  MLIRGPUToLLVMIRTranslation
+  MLIRGPUToGPURuntimeTransforms
+  MLIRNVVMDialect
+  MLIRNVVMTarget
+  MLIRNVVMToLLVMIRTranslation
+  MLIRLLVMToLLVMIRTranslation
+)

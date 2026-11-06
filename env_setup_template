@@ -1,9 +1,0 @@
-export MLIR_BUILD_DIR=/path/to/llvm-project/build
-export LLVM_BUILD_DIR=/path/to/llvm-project/build
-export LLVM_SOURCE_DIR=/path/to/llvm-project/llvm
-export MLIR_SOURCE_DIR=/path/to/llvm-project/mlir
-export OPS_ROOT=/path/to/OPS/ops/c
-
-export PYTHONPATH=${MLIR_BUILD_DIR}/tools/mlir/python_packages/mlir_core
-export PATH=${MLIR_BUILD_DIR}/bin:$PATH
-export LD_LIBRARY_PATH=${MLIR_BUILD_DIR}:$LD_LIBRARY_PATH

@@ -5,6 +5,8 @@
 /build/
 /build-*/
 *.cmake
+!cmake/*.cmake
+!*/CMakeLists.txt
 CMakeFiles/
 CMakeCache.txt
 
@@ -35,3 +37,6 @@ __pycache__/
 
 # subproject clones
 xdsl/*
+!test/e2e/*.cmake
+
+*Zone.Identifier

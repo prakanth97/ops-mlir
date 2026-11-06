@@ -1,107 +1,57 @@
 cmake_minimum_required(VERSION 3.20)
-project(ops-mlir CXX)
+project(OpsMlir VERSION 0.1.0 LANGUAGES C CXX)
 
+# MLIR 23 is C++17.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-#===============================================================================
-# MLIR/LLVM Setup
-#===============================================================================
-
-# Paths are read from environment variables. See README.md for setup
-# instructions (source env_setup or export these yourself before running cmake).
-if(NOT DEFINED ENV{MLIR_BUILD_DIR})
-  message(FATAL_ERROR "Environment variable MLIR_BUILD_DIR is not set. See README.md.")
-endif()
-if(NOT DEFINED ENV{LLVM_BUILD_DIR})
-  message(FATAL_ERROR "Environment variable LLVM_BUILD_DIR is not set. See README.md.")
-endif()
-if(NOT DEFINED ENV{LLVM_SOURCE_DIR})
-  message(FATAL_ERROR "Environment variable LLVM_SOURCE_DIR is not set. See README.md.")
-endif()
-if(NOT DEFINED ENV{MLIR_SOURCE_DIR})
-  message(FATAL_ERROR "Environment variable MLIR_SOURCE_DIR is not set. See README.md.")
-endif()
-if(NOT DEFINED ENV{OPS_ROOT})
-  message(FATAL_ERROR "Environment variable OPS_ROOT is not set. See README.md.")
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(MLIR_BUILD_DIR $ENV{MLIR_BUILD_DIR})
-set(LLVM_BUILD_DIR $ENV{LLVM_BUILD_DIR})
-set(LLVM_SOURCE_DIR $ENV{LLVM_SOURCE_DIR})
-set(MLIR_SOURCE_DIR $ENV{MLIR_SOURCE_DIR})
-set(OPS_ROOT $ENV{OPS_ROOT})
-set(OPS_INCLUDE_DIR ${OPS_ROOT}/include)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(LLVMVersion)
 
-# Find MLIR and LLVM packages
-find_package(MLIR REQUIRED CONFIG
-  HINTS "${MLIR_BUILD_DIR}/lib/cmake/mlir"
-)
-find_package(LLVM REQUIRED CONFIG
-  HINTS "${LLVM_BUILD_DIR}/lib/cmake/llvm"
-)
-find_package(Clang REQUIRED CONFIG
-  HINTS "${LLVM_BUILD_DIR}/lib/cmake/clang"
-)
+option(OPSJIT_BUILD_RUNTIME "Build libopsjit, the OPS-facing runtime (needs an OPS install in OPS_INSTALL)" ON)
+set(OPS_INSTALL "$ENV{OPS_INSTALL}" CACHE PATH "Install prefix of OPS (include/ and lib/); see scripts/build_ops.sh")
 
-# Include MLIR cmake utilities
-list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
-list(APPEND CMAKE_MODULE_PATH "${MLIR_BUILD_DIR}/cmake/modules")
+# Hosts without zstd development files (the WSL development image: no sudo to install them) can point
+# OPSJIT_ZSTD_LIBRARY at the zstd runtime library. LLVM's exported targets require zstd::libzstd_shared,
+# and nothing in this project includes a zstd header.
+set(OPSJIT_ZSTD_LIBRARY "" CACHE FILEPATH "zstd runtime library to use when its development package is missing")
+if(OPSJIT_ZSTD_LIBRARY AND NOT TARGET zstd::libzstd_shared)
+  add_library(zstd::libzstd_shared SHARED IMPORTED)
+  set_target_properties(zstd::libzstd_shared PROPERTIES IMPORTED_LOCATION "${OPSJIT_ZSTD_LIBRARY}")
+endif()
 
+# The pinned LLVM/MLIR/clang install: see scripts/env.sh (MLIR_DIR) and cmake/LLVMVersion.cmake.
+find_package(MLIR REQUIRED CONFIG)
+message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+opsjit_check_llvm_version()
+
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
+include(TableGen)
 include(AddLLVM)
 include(AddMLIR)
-include(TableGen)
+include(HandleLLVMOptions)
 
-#===============================================================================
-# CUDA GPU Backend Configuration
-#===============================================================================
-option(OPS_ENABLE_CUDA "Build the NVIDIA CUDA/NVVM backend pipeline" OFF)
+# Clang: the build-time kernel importer (ops/lib/Frontend) parses OPS kernels with it.
+find_package(Clang REQUIRED CONFIG HINTS "${LLVM_DIR}/../clang")
+message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
+# clang finds its builtin headers (stddef.h...) relative to its own executable; ours is not clang.
+set(OPSJIT_CLANG_RESOURCE_DIR "${LLVM_LIBRARY_DIR}/clang/${LLVM_VERSION_MAJOR}" CACHE PATH "clang resource directory")
 
-if(OPS_ENABLE_CUDA)
-  find_package(CUDAToolkit REQUIRED)
-endif()
+include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
+link_directories(${LLVM_BUILD_LIBRARY_DIR})
+add_definitions(${LLVM_DEFINITIONS})
 
-#===============================================================================
-# OpenMP Setup
-#===============================================================================
-# omp.h and libomp.so live in the OpenMP runtime build alongside LLVM.
-# Derive the path from MLIR_BUILD_DIR (same LLVM tree) — no extra env var needed.
-cmake_path(GET MLIR_BUILD_DIR PARENT_PATH LLVM_PROJECT_DIR)
-set(OMP_RUNTIME_DIR "${LLVM_PROJECT_DIR}/openmp/build/runtime/src")
-if(NOT EXISTS "${OMP_RUNTIME_DIR}/omp.h")
-  message(FATAL_ERROR "omp.h not found at ${OMP_RUNTIME_DIR}. "
-    "Ensure the LLVM OpenMP runtime was built in-tree alongside MLIR_BUILD_DIR.")
-endif()
+include(OpsJitTesting)
 
-add_compile_options(-fopenmp)
-add_link_options(-fopenmp)
-
-#===============================================================================
-# Project Structure
-#===============================================================================
-include_directories(${CMAKE_SOURCE_DIR}/include)
-include_directories(${OPS_INCLUDE_DIR})
-include_directories(${OMP_RUNTIME_DIR})
-link_directories(${OMP_RUNTIME_DIR})
-include_directories(${MLIR_INCLUDE_DIRS})
-include_directories(${LLVM_INCLUDE_DIRS})
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
-include_directories(${MLIR_BUILD_DIR}/include)
-include_directories(${LLVM_BUILD_DIR}/include)
-include_directories(${MLIR_SOURCE_DIR}/include)
-include_directories(${LLVM_SOURCE_DIR}/include)
-
-add_subdirectory(lib)
-add_subdirectory(apps)
-
-enable_testing()
+# Layering (see docs/design.md): core/ (namespace opdsl) knows nothing about OPS; ops/ is the OPS dialect,
+# analyses, transforms and the runtime that plugs into OPS; tools/ are command-line drivers.
+add_subdirectory(core)
+add_subdirectory(ops)
 add_subdirectory(tools)
-add_subdirectory(unittests)
-
-#===============================================================================
-# Compilation Database for Language Server
-#===============================================================================
-# Automatically generated at ${CMAKE_BINARY_DIR}/compile_commands.json
+add_subdirectory(test)
