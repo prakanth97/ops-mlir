@@ -1,4 +1,4 @@
-#include "ops-mlir/Frontend/CSubsetWalker.h"
+#include "ops-mlir/Frontend/c/CSubsetWalker.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"

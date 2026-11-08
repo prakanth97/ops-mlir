@@ -3,7 +3,8 @@
 #
 #     scripts/build_apps.sh                 # needs: scripts/build_ops.sh (OPS install), ops-mlir built (ninja opsjit ops-kernel-import)
 #
-# Environment: as scripts/env.sh, plus APPS_CMAKE_ARGS (extra cmake arguments, e.g. -DOPSJIT_APPS=tgv_DP;tgv_SP), APPS_BUILD (default $OPSJIT_BUILD_ROOT/OPS-jit-apps), OPSJIT_BUILD, JOBS, OPSJIT_APPS_CUDA=ON|OFF
+# Environment: as scripts/env.sh, plus APPS_CMAKE_ARGS (extra cmake arguments, e.g. -DOPSJIT_APPS=tgv_DP;tgv_SP), APPS_BUILD (default $OPSJIT_BUILD_ROOT/OPS-jit-apps), OPSJIT_BUILD, JOBS, OPSJIT_APPS_CUDA=ON|OFF,
+# OPSJIT_APPS_FORTRAN=ON|OFF (needs flang and scripts/build_ops_fortran.sh)
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC1091
@@ -31,6 +32,9 @@ if [ "$OPSJIT_HOST" = cluster ] && [ -f "$stdcxx" ]; then
   ld_flags="$ld_flags -L$(dirname "$stdcxx") -Wl,-rpath,$(dirname "$stdcxx")"
 fi
 [ -n "$ld_flags" ] && args+=( -DCMAKE_EXE_LINKER_FLAGS="$ld_flags" )
+if [ "${OPSJIT_APPS_FORTRAN:-OFF}" = ON ]; then
+  args+=( -DOPSJIT_APPS_FORTRAN=ON -DCMAKE_Fortran_COMPILER="$LLVM_INSTALL_PATH/bin/flang" )
+fi
 if [ -n "${HDF5_INSTALL_PATH:-}" ]; then
   wrappers=$OPSJIT_BUILD_ROOT/hdf5-wrappers
   args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" -DHDF5_C_COMPILER_EXECUTABLE="$wrappers/h5pcc" -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE )

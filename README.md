@@ -7,7 +7,7 @@ OPS's generated code.
 
 ## How it works
 
-1. **Build time.** The OPS translator (`--jit`) runs `ops-kernel-import`, a clang AST walker, over the user kernels and embeds one
+1. **Build time.** The OPS translator (`--jit`) runs `ops-kernel-import` over the user kernels (C++ with clang, Fortran with flang) and embeds one
    MLIR artifact per kernel (bytecode and a manifest) next to the ordinary generated code.
 2. **Run time.** `ops_par_loop` queues a descriptor instead of running the loop. When the program needs the data, OPS flushes the
    queue through the registered chain executor (`ops_register_chain_executor`).

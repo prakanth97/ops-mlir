@@ -4,6 +4,7 @@ import os
 config.llvm_tools_dir = "@OPSJIT_LLVM_TOOLS_DIR@"
 config.llvm_lib_dir = "@OPSJIT_LLVM_LIBRARY_DIR@"
 config.ops_include_dir = "@OPSJIT_OPS_INCLUDE_DIR@"
+config.fortran_importer = "@OPSJIT_ENABLE_FORTRAN@"
 config.opsjit_tools_dir = "@CMAKE_BINARY_DIR@/bin"
 config.opsjit_source_dir = "@CMAKE_SOURCE_DIR@"
 config.opsjit_binary_dir = "@CMAKE_BINARY_DIR@"

@@ -149,11 +149,11 @@ template <typename T> void compareElements(const char *a, const char *b, size_t 
 double relativeDifference(const char *type, const char *a, const char *b, size_t bytes, size_t &differing) {
   double maxDiff = 0, maxAbs = 0;
   differing = 0;
-  std::string t = type ? type : "";
-  if (t == "double") compareElements<double>(a, b, bytes / 8, maxDiff, maxAbs, differing);
-  else if (t == "float") compareElements<float>(a, b, bytes / 4, maxDiff, maxAbs, differing);
+  std::string t = elemName(type ? type : "");
+  if (t == "f64") compareElements<double>(a, b, bytes / 8, maxDiff, maxAbs, differing);
+  else if (t == "f32") compareElements<float>(a, b, bytes / 4, maxDiff, maxAbs, differing);
 #ifdef __FLT16_MAX__
-  else if (t == "half") compareElements<_Float16>(a, b, bytes / 2, maxDiff, maxAbs, differing);
+  else if (t == "f16") compareElements<_Float16>(a, b, bytes / 2, maxDiff, maxAbs, differing);
 #endif
   else compareElements<int32_t>(a, b, bytes / 4, maxDiff, maxAbs, differing);
   if (maxDiff == 0) return 0;
@@ -161,10 +161,10 @@ double relativeDifference(const char *type, const char *a, const char *b, size_t
 }
 
 double toleranceFor(const char *type) {
-  std::string t = type ? type : "";
-  if (t == "double") return 1e-12;
-  if (t == "float") return options().verifyFloatTol;
-  if (t == "half") return options().verifyHalfTol; // 11 bits of mantissa; the AOT code rounds a whole expression once, the JIT every operation
+  std::string t = elemName(type ? type : "");
+  if (t == "f64") return 1e-12;
+  if (t == "f32") return options().verifyFloatTol;
+  if (t == "f16") return options().verifyHalfTol; // 11 bits of mantissa; the AOT code rounds a whole expression once, the JIT every operation
   return 0;
 }
 

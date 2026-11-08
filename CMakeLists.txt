@@ -43,6 +43,28 @@ message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
 # clang finds its builtin headers (stddef.h...) relative to its own executable; ours is not clang.
 set(OPSJIT_CLANG_RESOURCE_DIR "${LLVM_LIBRARY_DIR}/clang/${LLVM_VERSION_MAJOR}" CACHE PATH "clang resource directory")
 
+# Flang: the Fortran kernel importer (ops/lib/Frontend/fortran). Must come from the same LLVM build as MLIR.
+option(OPSJIT_ENABLE_FORTRAN "Build the Fortran kernel importer (needs an LLVM build with flang)" OFF)
+if(OPSJIT_ENABLE_FORTRAN)
+  find_package(Flang REQUIRED CONFIG HINTS "${LLVM_DIR}/../flang")
+  message(STATUS "Using FlangConfig.cmake in: ${Flang_DIR}")
+  # In-process flang cannot find its intrinsic modules relative to its executable: ask the driver.
+  find_program(OPSJIT_FLANG flang HINTS "${LLVM_TOOLS_BINARY_DIR}" NO_DEFAULT_PATH)
+  set(_opsjit_iso_c_binding "")
+  if(OPSJIT_FLANG)
+    execute_process(COMMAND "${OPSJIT_FLANG}" -print-file-name=iso_c_binding.mod
+                    OUTPUT_VARIABLE _opsjit_iso_c_binding OUTPUT_STRIP_TRAILING_WHITESPACE)
+  endif()
+  set(_opsjit_intrinsic_dir "")
+  if(EXISTS "${_opsjit_iso_c_binding}")
+    cmake_path(GET _opsjit_iso_c_binding PARENT_PATH _opsjit_intrinsic_dir)
+  else()
+    message(WARNING "flang's intrinsic modules were not found (build flang-rt): Fortran kernels that use one, "
+                    "directly or through a module, will not import")
+  endif()
+  set(OPSJIT_FLANG_INTRINSIC_MODULE_DIR "${_opsjit_intrinsic_dir}" CACHE PATH "flang's intrinsic module directory")
+endif()
+
 include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})

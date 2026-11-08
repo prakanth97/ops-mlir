@@ -1,7 +1,8 @@
-#include "ops-mlir/Frontend/KernelImport.h"
+#include "ops-mlir/Frontend/c/KernelImport.h"
 
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
-#include "ops-mlir/Frontend/CSubsetWalker.h"
+#include "ops-mlir/Frontend/c/CSubsetWalker.h"
+#include "ops-mlir/Frontend/common/Manifest.h"
 
 #include "opdsl/Support/Hash.h"
 
@@ -52,41 +53,11 @@ std::string accessMacros() {
   return text;
 }
 
-std::string typeName(Type t) {
-  if (t.isF64()) return "f64";
-  if (t.isF32()) return "f32";
-  if (t.isF16()) return "f16";
-  if (t.isInteger(32)) return "i32";
-  if (t.isInteger(64)) return "i64";
-  std::string s;
-  llvm::raw_string_ostream(s) << t;
-  return s;
-}
-
-struct Param {
-  enum Kind { Acc, Gbl, Red, Idx } kind = Acc;
+/// A parameter of the kernel: what the manifest says about it, plus what the walk needs.
+struct Param : ParamSummary {
   const clang::ParmVarDecl *decl = nullptr;
-  Type elem;
-  bool isConst = false;
-  bool legacyMacro = false;
   bool byValue = false;
-  int64_t ncomp = 1;  // accessors: components used
-  int64_t gblDim = 1; // globals: elements used
-  Value arg;          // the ops.kernel block argument (not for Idx)
-  std::set<std::vector<int64_t>> reads, writes;
-  bool dynamicRead = false;
-  std::string style = "accumulate"; // reductions
-  std::string kindHint;             // reductions: add, min, max
-};
-
-struct ConstUse {
-  std::string name;
-  Type elem;
-  int64_t offset = 0, stride = 0;
-  bool dynamicIndex = false;
-  bool operator<(const ConstUse &o) const {
-    return std::tie(name, offset, stride, dynamicIndex) < std::tie(o.name, o.offset, o.stride, o.dynamicIndex);
-  }
+  Value arg; // the ops.kernel block argument (not for Idx)
 };
 
 const clang::CXXRecordDecl *accRecord(clang::QualType t) {
@@ -666,17 +637,7 @@ struct UsageScan : clang::RecursiveASTVisitor<UsageScan> {
 //===----------------------------------------------------------------------===//
 
 std::string failedManifest(const ImportOptions &options, const std::string &reason) {
-  llvm::json::Object o;
-  o["manifest_version"] = 1;
-  o["kernel"] = options.kernelName;
-  o["status"] = "failed";
-  o["reason"] = reason;
-  o["importer"] = importerId();
-  o["ndim"] = options.ndim;
-  std::string text;
-  llvm::raw_string_ostream os(text);
-  os << llvm::formatv("{0:2}", llvm::json::Value(std::move(o))) << "\n";
-  return text;
+  return writeFailedManifest(options.kernelName, options.ndim, reason, importerId());
 }
 
 ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
@@ -859,121 +820,17 @@ ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
   ReturnOp::create(walker.builder(), bld.getUnknownLoc(), ValueRange{});
   if (failed(verify(*module))) return failWith("the imported kernel does not verify");
 
-  // Constants whose value shapes the code and must therefore be folded (role "bound"): those that reach a loop bound
-  // or the index of an array constant or of a data-dependent read, and the arrays that are indexed.
-  std::set<std::string> boundConsts;
-  kernel.walk([&](ConstRefOp ref) {
-    if (ref.getIndex()) boundConsts.insert(ref.getName().str());
-    SmallVector<Value> work{ref.getResult()};
-    DenseSet<Value> seen;
-    while (!work.empty()) {
-      Value v = work.pop_back_val();
-      if (!seen.insert(v).second) continue;
-      for (OpOperand &use : v.getUses()) {
-        Operation *user = use.getOwner();
-        if (auto loop = dyn_cast<scf::ForOp>(user)) {
-          if (use.getOperandNumber() < 3) boundConsts.insert(ref.getName().str());
-        } else if (auto other = dyn_cast<ConstRefOp>(user)) {
-          if (other.getIndex() && use.get() == other.getIndex()) boundConsts.insert(ref.getName().str());
-        } else if (isa<ReadDynOp>(user)) {
-          boundConsts.insert(ref.getName().str());
-        } else if (user->getDialect() && user->getDialect()->getNamespace() == "arith" && user->getNumResults() == 1) {
-          work.push_back(user->getResult(0));
-        }
-      }
-    }
-  });
-
   // --- the manifest -------------------------------------------------------------------------------------------------
-  auto offsetsJson = [](const std::set<std::vector<int64_t>> &set) {
-    llvm::json::Array a;
-    for (const auto &off : set) {
-      llvm::json::Array o;
-      for (int64_t v : off) o.push_back(v);
-      a.push_back(std::move(o));
-    }
-    return a;
-  };
-  llvm::json::Array paramsJson;
-  llvm::json::Object reads, writes;
-  llvm::json::Array dynamicReads;
-  for (auto [i, p] : llvm::enumerate(params)) {
-    llvm::json::Object o;
-    switch (p.kind) {
-    case Param::Acc:
-      o["kind"] = "acc";
-      o["elem"] = typeName(p.elem);
-      o["ncomp"] = p.ncomp;
-      o["const"] = p.isConst;
-      o["legacy_macro"] = p.legacyMacro;
-      reads[std::to_string(i)] = offsetsJson(p.reads);
-      writes[std::to_string(i)] = offsetsJson(p.writes);
-      if (p.dynamicRead) dynamicReads.push_back(std::to_string(i));
-      break;
-    case Param::Gbl:
-      o["kind"] = "gbl";
-      o["elem"] = typeName(p.elem);
-      o["dim"] = p.gblDim;
-      break;
-    case Param::Red:
-      o["kind"] = "reduce";
-      o["elem"] = typeName(p.elem);
-      o["dim"] = 1;
-      o["style"] = p.style;
-      o["kind_hint"] = p.kindHint.empty() ? "none" : p.kindHint;
-      break;
-    case Param::Idx: o["kind"] = "idx"; break;
-    }
-    paramsJson.push_back(std::move(o));
-  }
-  llvm::json::Array constsJson;
-  for (const ConstUse &c : walker.constUses()) {
-    llvm::json::Object o;
-    o["name"] = c.name;
-    o["elem"] = typeName(c.elem);
-    o["offset"] = c.offset;
-    if (c.dynamicIndex) {
-      o["array_stride"] = c.stride;
-      o["dynamic_index"] = true;
-    }
-    if (boundConsts.count(c.name)) o["role"] = "bound";
-    constsJson.push_back(std::move(o));
-  }
-  llvm::json::Array idxAxes;
-  for (int d = 0; d < 3; ++d)
-    if (walker.idxAxesRead() & (1u << d)) idxAxes.push_back(d);
-  llvm::json::Object traits;
-  traits["idx_axes_read"] = std::move(idxAxes);
-  traits["dynamic_reads"] = std::move(dynamicReads);
-  traits["dropped_printf"] = static_cast<int64_t>(walker.droppedPrintf());
-  traits["prints"] = static_cast<int64_t>(walker.printfs());
-  traits["reads"] = std::move(reads);
-  traits["writes"] = std::move(writes);
+  KernelSummary summary;
+  summary.kernel = options.kernelName;
+  summary.ndim = options.ndim;
+  for (const Param &p : params) summary.params.push_back(p);
+  summary.consts = walker.constUses();
+  summary.idxAxesRead = walker.idxAxesRead();
+  summary.droppedPrintf = walker.droppedPrintf();
+  summary.prints = walker.printfs();
+  std::string text = writeManifest(summary, kernel, *module, importerId());
 
-  llvm::json::Object manifest;
-  manifest["manifest_version"] = 1;
-  manifest["kernel"] = options.kernelName;
-  manifest["status"] = "ok";
-  manifest["importer"] = importerId();
-  manifest["ndim"] = options.ndim;
-  manifest["params"] = std::move(paramsJson);
-  manifest["consts"] = std::move(constsJson);
-  manifest["traits"] = std::move(traits);
-
-  // The digest identifies what the JIT will use: the module and everything in the manifest.
-  std::string moduleText;
-  {
-    llvm::raw_string_ostream ts(moduleText);
-    module->print(ts);
-  }
-  std::string body;
-  llvm::raw_string_ostream bs(body);
-  bs << llvm::formatv("{0}", llvm::json::Value(llvm::json::Object(manifest)));
-  manifest["digest"] = opdsl::Hasher().add(moduleText).add(body).add(importerId()).hex();
-
-  std::string text;
-  llvm::raw_string_ostream os(text);
-  os << llvm::formatv("{0:2}", llvm::json::Value(std::move(manifest))) << "\n";
   result.ok = true;
   result.module = std::move(module);
   result.manifest = std::move(text);

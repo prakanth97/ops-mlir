@@ -1,8 +1,10 @@
-//===- ops-kernel-import.cpp - build-time kernel importer (provider A) -----------===//
+//===- ops-kernel-import.cpp - build-time kernel importer (providers A and F) -----------===//
 //
 //   ops-kernel-import --kernel K (--source app.cpp | --header k.h) --ndim N
 //                     [--kinds acc,acc,gbl,red,idx] -o out.mlir|out.mlirbc --manifest out.json
 //                     [-- <clang flags: -I..., -D...>]
+//
+//   ops-kernel-import [--provider F] --kernel K --source k.inc [--module m.F90]... --ndim N ...   (Fortran)
 //
 // Imports the OPS kernel `K`. The output is an MLIR module with `ops.kernel @K` (text for *.mlir, bytecode for
 // anything else) and the manifest. A kernel that cannot be imported is not an error of the build: the manifest then
@@ -11,7 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
-#include "ops-mlir/Frontend/KernelImport.h"
+#include "ops-mlir/Frontend/c/KernelImport.h"
+#include "ops-mlir/Frontend/fortran/FortranKernelImport.h"
 
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -22,6 +25,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -36,7 +40,10 @@ static cl::opt<int> ndim("ndim", cl::desc("dimension of the block (1-3)"), cl::R
 static cl::opt<std::string> kinds("kinds", cl::desc("comma-separated parameter kinds: acc,gbl,red,idx"));
 static cl::opt<std::string> output("o", cl::desc("output module (.mlir: text, otherwise bytecode)"));
 static cl::opt<std::string> manifestPath("manifest", cl::desc("output manifest (JSON)"));
-static cl::opt<std::string> provider("provider", cl::desc("importer provider"), cl::init("A"));
+static cl::opt<std::string> provider("provider", cl::desc("importer provider: A (C++, clang) or F (Fortran, flang); default: "
+                                                           "from the extension of --source"));
+static cl::list<std::string> modules("module", cl::desc("provider F: a module source the kernel uses (repeatable, in "
+                                                         "dependency order)"));
 static cl::opt<std::string> resourceDir("resource-dir", cl::desc("clang resource directory"));
 static cl::opt<std::string> argsFile("args-file", cl::desc("file with more clang arguments, separated by blanks and newlines"));
 static cl::opt<std::string> depFile("depfile", cl::desc("write the files the translation unit read, as a Makefile dependency rule"));
@@ -53,8 +60,13 @@ int main(int argc, char **argv) {
       break;
     }
   cl::ParseCommandLineOptions(ownArgc, argv, "OPS kernel importer\n");
-  if (provider != "A") {
-    errs() << "ops-kernel-import: only provider A exists so far\n";
+  std::string chosen = provider;
+  if (chosen.empty()) {
+    StringRef ext = sys::path::extension(source.getValue());
+    chosen = (ext == ".inc" || ext.equals_insensitive(".f90") || ext.equals_insensitive(".f")) ? "F" : "A";
+  }
+  if (chosen != "A" && chosen != "F") {
+    errs() << "ops-kernel-import: unknown provider '" << chosen << "' (A: C++, F: Fortran)\n";
     return 2;
   }
 
@@ -69,6 +81,7 @@ int main(int argc, char **argv) {
   options.headerFile = header;
   options.ndim = ndim;
   options.resourceDir = resourceDir;
+  options.modules.assign(modules.begin(), modules.end());
   for (StringRef rest(kinds); !rest.empty();) {
     auto [first, tail] = rest.split(',');
     options.kinds.push_back(first.str());
@@ -93,7 +106,8 @@ int main(int argc, char **argv) {
   }
   for (const std::string &a : clangArgs) options.clangArgs.push_back(a);
 
-  ops_mlir::frontend::ImportResult result = ops_mlir::frontend::importKernel(ctx, options);
+  ops_mlir::frontend::ImportResult result = chosen == "F" ? ops_mlir::frontend::importFortranKernel(ctx, options)
+                                                            : ops_mlir::frontend::importKernel(ctx, options);
   for (const std::string &w : result.warnings) errs() << "ops-kernel-import: warning: " << kernel << ": " << w << "\n";
   if (!result.ok) errs() << "ops-kernel-import: " << kernel << ": not imported: " << result.reason << "\n";
 
