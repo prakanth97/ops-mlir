@@ -40,5 +40,10 @@ add_mlir_library(OPSMLIRPipelines
   MLIRNVVMDialect
   MLIRNVVMTarget
   MLIRNVVMToLLVMIRTranslation
+  MLIRAMDGPUToROCDL
+  MLIRGPUToROCDLTransforms
+  MLIRROCDLDialect
+  MLIRROCDLTarget
+  MLIRROCDLToLLVMIRTranslation
   MLIRLLVMToLLVMIRTranslation
 )

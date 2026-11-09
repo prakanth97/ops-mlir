@@ -47,11 +47,11 @@ DONE:
 } // namespace
 
 OPDSL_TEST(GpuShim, LaunchesAKernelOnTheDefaultStream) {
-  if (!opdsl::gpu::cudaAvailable()) {
+  if (std::strcmp(opdsl::gpu::gpuRuntime(), "cuda") != 0 || !opdsl::gpu::gpuAvailable()) {
     std::printf("no CUDA device: skipped\n");
     return;
   }
-  OPDSL_EXPECT(std::strlen(opdsl::gpu::cudaDeviceArch()) >= 5); // "sm_xx"
+  OPDSL_EXPECT(std::strlen(opdsl::gpu::gpuDeviceArch()) >= 5); // "sm_xx"
   constexpr int n = 1000;
   void *module = mgpuModuleLoadJIT(const_cast<char *>(kPtx), 3, std::strlen(kPtx) + 1);
   OPDSL_EXPECT(module != nullptr);

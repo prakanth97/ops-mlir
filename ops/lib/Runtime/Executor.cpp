@@ -348,8 +348,9 @@ PipelineSettings pipelineSettingsFor(const Options &o, ops_kernel_descriptor *fi
   s.gpuBlock = o.gpuBlock;
   s.ptxasOptions = o.ptxasOpts;
   if (first->isdevice) {
-    s.gpuArch = o.gpuArch.empty() ? opdsl::gpu::cudaDeviceArch() : o.gpuArch;
-    s.gpuFeatures = ptxFeature();
+    s.gpuRuntime = opdsl::gpu::gpuRuntime();
+    s.gpuArch = o.gpuArch.empty() ? opdsl::gpu::gpuDeviceArch() : o.gpuArch;
+    if (s.gpuRuntime == "cuda") s.gpuFeatures = ptxFeature();
   }
   return s;
 }
@@ -382,11 +383,15 @@ void Executor::run(OPS_instance *instance, ops_kernel_descriptor **descs, int n,
 
 bool Executor::deviceReady() {
   if (deviceState_ < 0) {
-    deviceState_ = opdsl::gpu::cudaAvailable() ? 1 : 0;
-    if (deviceState_) {
+    deviceState_ = opdsl::gpu::gpuAvailable() ? 1 : 0;
+    if (deviceState_ && std::string(opdsl::gpu::gpuRuntime()) == "cuda") {
       // The NVVM target finds ptxas and libdevice through the toolkit path: the usual variables, else the CUDA used to build OPS.
       if (!std::getenv("CUDA_ROOT") && !std::getenv("CUDA_HOME") && !std::getenv("CUDA_PATH"))
         if (const char *root = std::getenv("CUDA_INSTALL_PATH")) ::setenv("CUDA_ROOT", root, 0);
+    } else if (deviceState_ && options().gpuArch.empty() && !*opdsl::gpu::gpuDeviceArch()) {
+      // AMD binaries are specific to the chip: without it the device loops run OPS's code.
+      std::fprintf(stderr, "ops_jit: the architecture of the HIP device is unknown: set OPS_JIT_GPU_ARCH (e.g. gfx90a)\n");
+      deviceState_ = 0;
     }
   }
   return deviceState_ == 1;

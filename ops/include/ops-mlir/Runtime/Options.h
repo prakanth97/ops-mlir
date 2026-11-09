@@ -40,7 +40,7 @@ struct Options {
   bool fma = false;              ///< OPS_JIT_FMA: let the CPU code generator fuse multiply-adds (results change in the last bits: verify mode then reports differences)
   std::string printfPolicy = "drop"; ///< OPS_JIT_PRINTF: keep | drop | decline (what to do with printf in kernels)
   std::string gpuBlock = "32,4,1"; ///< OPS_JIT_GPU_BLOCK: thread block (x,y,z) of the generated kernels
-  std::string gpuArch;           ///< OPS_JIT_GPU_ARCH: e.g. sm_80 (empty: the device in use)
+  std::string gpuArch;           ///< OPS_JIT_GPU_ARCH: e.g. sm_80, gfx90a (empty: the device in use)
   std::string ptxasOpts;         ///< OPS_JIT_PTXAS_OPTS: extra ptxas options (e.g. -v)
 
   /// Reads the OPS_JIT_* environment variables.

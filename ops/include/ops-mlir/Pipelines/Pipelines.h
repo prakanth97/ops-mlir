@@ -5,6 +5,8 @@
 //                               options: max-loops reorder placement guarded box-ratio
 //   ops-jit-cpu                 ops-specialize, convert-ops-to-scf, OpenMP, down to the LLVM dialect
 //                               options: omp specialize soa
+//   ops-jit-cuda                convert-ops-to-scf target=gpu, NVVM, fatbin
+//   ops-jit-rocm                convert-ops-to-scf target=gpu, ROCDL, AMDGPU binary
 //
 // They are registered with the process-wide opdsl::PipelineRegistry (the runtime builds them by name and option
 // string) and, for ops-opt, as named pipelines on the command line (-ops-jit-cpu="omp=false").
@@ -42,10 +44,11 @@ struct PipelineSettings {
   bool omp = true;
   std::string loops = "scf";       ///< scf or affine
   std::string affinePasses;        ///< a pass pipeline run on the affine form (implies loops=affine)
-  // GPU (ops-jit-cuda)
+  // GPU (ops-jit-cuda, ops-jit-rocm)
+  std::string gpuRuntime = "cuda"; ///< cuda (ops-jit-cuda) or hip (ops-jit-rocm)
   std::string gpuBlock = "32,4,1"; ///< thread block x,y,z
-  std::string gpuArch;             ///< NVVM chip, e.g. sm_80
-  std::string gpuFeatures;         ///< NVVM target features, e.g. +ptx83
+  std::string gpuArch;             ///< chip, e.g. sm_80 or gfx90a
+  std::string gpuFeatures;         ///< target features, e.g. +ptx83 (NVVM)
   std::string ptxasOptions;
 };
 

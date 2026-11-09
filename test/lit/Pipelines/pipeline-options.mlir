@@ -7,6 +7,9 @@
 // RUN: not ops-opt %s -ops-jit-cpu="loops=affine affine-passes=no-such-pass" 2>&1 | FileCheck %s --check-prefix=NOPASS
 // RUN: not ops-opt %s -ops-jit-plan="placement=middle" 2>&1 | FileCheck %s --check-prefix=PLACEMENT
 // RUN: not ops-opt %s -ops-jit-frontend="anything=1" 2>&1 | FileCheck %s --check-prefix=NOOPTS
+// RUN: not ops-opt %s -ops-jit-rocm="format=cubin" 2>&1 | FileCheck %s --check-prefix=ROCMFORMAT
+// RUN: not ops-opt %s -ops-jit-rocm="ptxas=-v" 2>&1 | FileCheck %s --check-prefix=ROCMBOGUS
+// RUN: ops-opt %s -ops-jit-rocm="chip=gfx90a block=64x4x1" | FileCheck %s
 // RUN: ops-opt %s -ops-jit-plan="max-loops=2 reorder=false" | FileCheck %s
 // RUN: ops-opt %s -ops-jit-plan="max-loops=2,reorder=false" | FileCheck %s
 
@@ -18,6 +21,8 @@
 // NOPASS: option 'affine-passes':
 // PLACEMENT: option 'placement' must be earliest or latest, got 'middle'
 // NOOPTS: unknown option 'anything' (there are none)
+// ROCMFORMAT: option 'format' must be fatbin, bin, isa, llvm or offloading, got 'cubin'
+// ROCMBOGUS: unknown option 'ptxas' (known: chip, features, wave64, block, format, rocm, specialize, soa, fma, restrict)
 // CHECK: ops.chain
 ops.chain @empty() {
   ops.return

@@ -83,8 +83,9 @@ same from code, before the first loop):
 | `OPS_JIT_SPECIALIZE` | none | `ranges`, `shapes`: fold loop ranges / dat shapes into the code (one compile per distinct value) |
 | `OPS_JIT_CACHE`, `OPS_JIT_CACHE_DIR` | 1, `~/.cache/opdsl-jit` | persistent cache of compiled code (also `$XDG_CACHE_HOME/opdsl-jit`) |
 | `OPS_JIT_RUN_MAX` | 512 | most loops planned together |
-| `OPS_JIT_GPU_BLOCK` | 32,4,1 | thread block of generated CUDA kernels |
-| `OPS_JIT_GPU_ARCH` | the device | e.g. `sm_80` |
+| `OPS_JIT_GPU` | the first available | GPU runtime: `cuda` (NVIDIA, `ops-jit-cuda`) or `hip` (AMD, `ops-jit-rocm`; kernels need the ROCm device libraries: `ROCM_PATH`, default `/opt/rocm`) |
+| `OPS_JIT_GPU_BLOCK` | 32,4,1 | thread block of generated GPU kernels |
+| `OPS_JIT_GPU_ARCH` | the device | e.g. `sm_80`, `gfx90a` |
 | `OPS_JIT_PTXAS_OPTS` | | e.g. `-v` to see register use |
 | `OPS_JIT_SYNC` | 0 | synchronise after every GPU launch (debugging) |
 | `OPS_JIT_FMA` | 0 | let the CPU code generator fuse multiply-adds (no measurable gain on the machines tried; the last bits of the results change, so `OPS_JIT_VERIFY` reports differences) |

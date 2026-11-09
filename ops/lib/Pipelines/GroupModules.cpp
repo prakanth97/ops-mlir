@@ -11,9 +11,12 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/InitAllExtensions.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Target/LLVM/NVVM/Target.h"
+#include "mlir/Target/LLVM/ROCDL/Target.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
@@ -55,14 +58,17 @@ std::string moduleBytecode(ModuleOp module) {
 
 void registerJITDialects(DialectRegistry &registry) {
   registry.insert<OPSDialect, arith::ArithDialect, func::FuncDialect, math::MathDialect, memref::MemRefDialect,
-                  scf::SCFDialect, cf::ControlFlowDialect, LLVM::LLVMDialect, omp::OpenMPDialect, gpu::GPUDialect, NVVM::NVVMDialect>();
-  // gpu-module-to-binary serialises the kernel module: it needs the NVVM target and the translations to LLVM IR.
+                  scf::SCFDialect, cf::ControlFlowDialect, LLVM::LLVMDialect, omp::OpenMPDialect, gpu::GPUDialect, NVVM::NVVMDialect,
+                  ROCDL::ROCDLDialect>();
+  // gpu-module-to-binary serialises the kernel module: it needs the NVVM / ROCDL target and the translations to LLVM IR.
   // The extensions that the GPU pipelines (convert-to-llvm, nvgpu...) rely on.
   registerAllExtensions(registry);
   NVVM::registerNVVMTargetInterfaceExternalModels(registry);
+  ROCDL::registerROCDLTargetInterfaceExternalModels(registry);
   registerGPUDialectTranslation(registry);
   gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(registry);
   registerNVVMDialectTranslation(registry);
+  registerROCDLDialectTranslation(registry);
   registerLLVMDialectTranslation(registry);
 }
 

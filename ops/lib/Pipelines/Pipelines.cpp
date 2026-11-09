@@ -3,12 +3,15 @@
 #include "ops-mlir/Conversion/Passes.h"
 #include "ops-mlir/Transforms/Passes.h"
 
+#include "mlir/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/GPUCommon/GPUCommonPass.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
+#include "mlir/Conversion/GPUToROCDL/Runtimes.h"
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/NVGPUToNVVM/NVGPUToNVVM.h"
@@ -30,11 +33,13 @@
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <mutex>
+#include <string>
 
 namespace ops_mlir::ops {
 
@@ -220,6 +225,86 @@ llvm::Error buildCUDA(mlir::OpPassManager &pm, const OptionMap &o) {
   return llvm::Error::success();
 }
 
+/// Lowers a group for AMD GPUs: as buildCUDA, with the stages of mlir::gpu::buildLowerToROCDLPassPipeline
+/// (GPUToROCDLPipeline.cpp) and ops-gpu-kernel-attrs between the conversion of the kernels and the serialisation.
+llvm::Error buildAMD(mlir::OpPassManager &pm, const OptionMap &o) {
+  OpsSpecializeOptions specialize;
+  specialize.mode = o.getString("specialize", "none");
+  if (specialize.mode != "none" && specialize.mode != "ranges" && specialize.mode != "shapes")
+    return pipelineError("option 'specialize' must be none, ranges or shapes, got '" + specialize.mode + "'");
+  std::string format = o.getString("format", "fatbin");
+  if (format != "fatbin" && format != "bin" && format != "isa" && format != "llvm" && format != "offloading")
+    return pipelineError("option 'format' must be fatbin, bin, isa, llvm or offloading, got '" + format + "'");
+
+  std::string block = o.getString("block", "32x4x1");
+  std::replace(block.begin(), block.end(), 'x', ',');
+  ConvertOpsToSCFOptions lower;
+  lower.soa = o.getBool("soa", false);
+  lower.target = "gpu";
+  lower.block = block;
+
+  pm.addPass(createOpsSpecialize(specialize));
+  pm.addPass(createConvertOpsToSCF(lower));
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+  if (o.getBool("fma", false)) pm.addPass(createOpsFpContract());
+
+  mlir::gpu::GPUToROCDLPipelineOptions rocdl;
+  rocdl.chip = o.getString("chip", "gfx908");
+  rocdl.features = o.getString("features", "");
+  rocdl.wave64 = o.getBool("wave64", true);
+  rocdl.binaryFormat = format;
+  rocdl.optLevel = 3;
+
+  mlir::ConvertAMDGPUToROCDLPassOptions amdgpu;
+  amdgpu.chipset = rocdl.chip;
+  pm.addPass(mlir::createConvertAMDGPUToROCDLPass(amdgpu));
+  pm.addPass(mlir::createGpuKernelOutliningPass());
+  pm.addPass(mlir::createConvertVectorToSCFPass());
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::createConvertFuncToLLVMPass());
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  mlir::GpuROCDLAttachTargetOptions target;
+  target.triple = rocdl.triple;
+  target.chip = rocdl.chip;
+  target.features = rocdl.features;
+  target.abiVersion = rocdl.abiVersion;
+  target.optLevel = rocdl.optLevel;
+  target.wave64Flag = rocdl.wave64;
+  pm.addPass(mlir::createGpuROCDLAttachTarget(target));
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  mlir::ConvertIndexToLLVMPassOptions index;
+  index.indexBitwidth = rocdl.indexBitWidth;
+  pm.addPass(mlir::createConvertIndexToLLVMPass(index));
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+
+  mlir::ConvertGpuOpsToROCDLOpsOptions kernels;
+  kernels.chipset = rocdl.chip;
+  kernels.useBarePtrCallConv = rocdl.kernelUseBarePtrCallConv;
+  kernels.indexBitwidth = rocdl.indexBitWidth;
+  kernels.runtime = mlir::gpu::amd::Runtime::HIP;
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToROCDLOps(kernels));
+  if (o.getBool("restrict", true)) pm.addNestedPass<mlir::gpu::GPUModuleOp>(createOpsGpuKernelAttrs());
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createCSEPass());
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createReconcileUnrealizedCastsPass());
+  mlir::GpuToLLVMConversionPassOptions host;
+  host.hostBarePtrCallConv = rocdl.hostUseBarePtrCallConv;
+  host.kernelBarePtrCallConv = rocdl.kernelUseBarePtrCallConv;
+  pm.addPass(mlir::createGpuToLLVMConversionPass(host));
+  mlir::GpuModuleToBinaryPassOptions binary;
+  binary.compilationTarget = rocdl.binaryFormat;
+  binary.toolkitPath = o.getString("rocm", "");
+  pm.addPass(mlir::createGpuModuleToBinaryPass(binary));
+  pm.addPass(mlir::createConvertMathToLLVMPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
+  return llvm::Error::success();
+}
+
 } // namespace
 
 void registerOPSPipelines(PipelineRegistry &registry) {
@@ -254,6 +339,19 @@ void registerOPSPipelines(PipelineRegistry &registry) {
                  {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"},
                  {"restrict", "bool", "mark the dat pointers of the kernels noalias (default true)"}},
                 buildCUDA});
+  registry.add({"ops-jit-rocm",
+                "lower a group to a HIP kernel launch (host code in the LLVM dialect, kernel as an AMDGPU binary)",
+                {{"chip", "string", "GPU architecture, e.g. gfx90a"},
+                 {"features", "string", "AMDGPU target features"},
+                 {"wave64", "bool", "wave64 mode (default true; false: wave32, RDNA)"},
+                 {"block", "string", "thread block size, e.g. 32x4x1 (x fastest)"},
+                 {"format", "string", "fatbin (default), bin, isa, llvm or offloading"},
+                 {"rocm", "string", "ROCm installation (device libraries, ld.lld); empty: ROCM_PATH or /opt/rocm"},
+                 {"specialize", "string", "none, ranges or shapes"},
+                 {"soa", "bool", "structure-of-arrays layout of multi-component dats"},
+                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"},
+                 {"restrict", "bool", "mark the dat pointers of the kernels noalias (default true)"}},
+                buildAMD});
 }
 
 void registerOPSPipelinesWithMLIR() {
@@ -295,6 +393,13 @@ GroupPipeline groupPipeline(bool device, int rank, const PipelineSettings &s) {
     std::array<int64_t, 3> bs = gpuBlockFor(s.gpuBlock, rank);
     std::string block = std::to_string(bs[0]) + "x" + std::to_string(bs[1]) + "x" + std::to_string(bs[2]), ptxas = s.ptxasOptions;
     std::replace(ptxas.begin(), ptxas.end(), ' ', ':');
+    if (s.gpuRuntime == "hip") {
+      p.name = "ops-jit-rocm";
+      p.options = "chip=" + s.gpuArch + " block=" + block + " specialize=" + s.specialize + " soa=" + soa;
+      if (!s.gpuFeatures.empty()) p.options += " features=" + s.gpuFeatures;
+      if (s.fma) p.options += " fma=true";
+      return p;
+    }
     p.name = "ops-jit-cuda";
     p.options = "chip=" + s.gpuArch + " features=" + s.gpuFeatures + " block=" + block + " specialize=" + s.specialize + " soa=" + soa;
     if (!ptxas.empty()) p.options += " ptxas=" + ptxas;

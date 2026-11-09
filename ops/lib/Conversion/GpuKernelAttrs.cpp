@@ -15,7 +15,7 @@ using namespace mlir;
 struct OpsGpuKernelAttrsPass : public impl::OpsGpuKernelAttrsBase<OpsGpuKernelAttrsPass> {
   void runOnOperation() override {
     getOperation().walk([&](LLVM::LLVMFuncOp func) {
-      if (!func->hasAttr("gpu.kernel") && !func->hasAttr("nvvm.kernel")) return;
+      if (!func->hasAttr("gpu.kernel") && !func->hasAttr("nvvm.kernel") && !func->hasAttr("rocdl.kernel")) return;
       // Every pointer argument of a kernel of ours belongs to a dat (or a reduction buffer): the pointers come in pairs
       // (allocated, aligned) at the head of an expanded memref descriptor.
       unsigned n = func.getNumArguments();

@@ -46,3 +46,17 @@ config.substitutions.append(("%ops_include", config.ops_include_dir))
 
 if config.fortran_importer.upper() in ("ON", "TRUE", "1", "YES"):
     config.available_features.add("fortran-importer")
+
+# ops-jit-rocm serialises kernels with the ROCm device libraries (<rocm>/amdgcn/bitcode) and LLVM's AMDGPU target.
+rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+config.substitutions.append(("%rocm_path", rocm_path))
+if os.path.isdir(os.path.join(rocm_path, "amdgcn", "bitcode")):
+    import subprocess
+
+    try:
+        targets = subprocess.run([os.path.join(config.llvm_tools_dir, "llvm-config"), "--targets-built"],
+                                 capture_output=True, text=True).stdout.split()
+    except OSError:
+        targets = []
+    if "AMDGPU" in targets:
+        config.available_features.add("rocm")

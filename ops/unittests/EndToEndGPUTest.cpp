@@ -54,7 +54,7 @@ constexpr int kNx = 72, kNy = 10; // 70 x 9 points computed (not a multiple of t
 } // namespace
 
 OPDSL_TEST(EndToEndGPU, ThreadPerPointKernelWithAtomicReduction) {
-  if (!opdsl::gpu::cudaAvailable()) {
+  if (std::string(opdsl::gpu::gpuRuntime()) != "cuda" || !opdsl::gpu::gpuAvailable()) {
     std::printf("no CUDA device: skipped\n");
     return;
   }
@@ -87,7 +87,7 @@ OPDSL_TEST(EndToEndGPU, ThreadPerPointKernelWithAtomicReduction) {
   CompilerOptions co;
   co.useCache = false;
   GroupCompiler compiler(ctx, registry, co);
-  std::string options = std::string("chip=") + opdsl::gpu::cudaDeviceArch() + " block=32x4x1";
+  std::string options = std::string("chip=") + opdsl::gpu::gpuDeviceArch() + " block=32x4x1";
   std::string error;
   std::shared_ptr<GroupCode> code = compiler.compile(groups[0].module.get(), "ops-jit-cuda", options, error);
   OPDSL_EXPECT(code != nullptr);
